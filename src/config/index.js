@@ -4,7 +4,7 @@
  * structural defaults that are safe to commit.
  */
 
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 import dotenv from 'dotenv';
 
@@ -13,7 +13,9 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env.NODE_ENV || 'development';
 
-const { default: envConfig } = await import(path.join(__dirname, `${env}.js`));
+// Windows requires file:// URLs for absolute-path dynamic imports
+const envConfigUrl = pathToFileURL(path.join(__dirname, `${env}.js`)).href;
+const { default: envConfig } = await import(envConfigUrl);
 
 const base = {
   env,

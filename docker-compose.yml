@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: scraping_framework
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/database/migrations:/docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: node src/api/server.js
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - postgres
+      - redis
+    env_file: .env
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: node src/queues/workers/ScrapingWorker.js
+    depends_on:
+      - postgres
+      - redis
+    env_file: .env
+    deploy:
+      replicas: 4
+
+volumes:
+  postgres_data:
+  redis_data:

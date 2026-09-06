@@ -1,0 +1,8 @@
+node_modules/
+logs/
+exports/output/
+*.log
+.DS_Store
+coverage/
+dist/
+browser-data/

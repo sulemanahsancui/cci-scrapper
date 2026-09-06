@@ -1,0 +1,49 @@
+{
+  "statusPort": 8787,
+  "instances": [
+    {
+      "id": "s1",
+      "onlyRegions": [
+        "AUVERGNE-RHONE-ALPES",
+        "CORSE",
+        "COLLECTIVITES D'OUTRE-MER",
+        "MAYOTTE"
+      ]
+    },
+    {
+      "id": "s2",
+      "onlyRegions": [
+        "ILE-DE-FRANCE",
+        "GUADELOUPE",
+        "GUYANE",
+        "MARTINIQUE",
+        "LA REUNION"
+      ]
+    },
+    {
+      "id": "s3",
+      "onlyRegions": [
+        "OCCITANIE",
+        "BRETAGNE",
+        "CENTRE-VAL DE LOIRE"
+      ]
+    },
+    {
+      "id": "s4",
+      "onlyRegions": [
+        "GRAND EST",
+        "HAUTS-DE-FRANCE",
+        "BOURGOGNE-FRANCHE-COMTE"
+      ]
+    },
+    {
+      "id": "s5",
+      "onlyRegions": [
+        "NOUVELLE-AQUITAINE",
+        "NORMANDIE",
+        "PAYS DE LA LOIRE",
+        "PROVENCE-ALPES-COTE D'AZUR"
+      ]
+    }
+  ]
+}

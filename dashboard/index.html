@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CCI Scraper — Fleet Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --border: #2a3542;
+      --text: #e7eef6;
+      --muted: #8b9aab;
+      --accent: #3d8bfd;
+      --ok: #3ecf8e;
+      --warn: #f0b429;
+      --err: #f07178;
+      --done: #7aa2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      justify-content: space-between;
+    }
+    h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+    .muted { color: var(--muted); font-size: 0.875rem; }
+    main { padding: 1.25rem 1.5rem 2.5rem; max-width: 1100px; margin: 0 auto; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+    }
+    .stat .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat .value { font-size: 1.5rem; font-weight: 650; margin-top: 0.2rem; }
+    .downloads {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1.25rem;
+    }
+    .downloads h2 { margin: 0 0 0.75rem; font-size: 1rem; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    a.btn, button.btn {
+      display: inline-block;
+      text-decoration: none;
+      border: 1px solid var(--border);
+      background: #243041;
+      color: var(--text);
+      padding: 0.45rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    a.btn.primary, button.btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    a.btn:hover, button.btn:hover { filter: brightness(1.08); }
+    .grid {
+      display: grid;
+      gap: 0.75rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+    }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.6rem;
+    }
+    .card h3 { margin: 0; font-size: 1rem; }
+    .badge {
+      font-size: 0.75rem;
+      font-weight: 650;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .badge.running { background: rgba(62, 207, 142, 0.15); color: var(--ok); }
+    .badge.restarting { background: rgba(240, 180, 41, 0.15); color: var(--warn); }
+    .badge.done { background: rgba(122, 162, 247, 0.15); color: var(--done); }
+    .badge.failed, .badge.stopped, .badge.error { background: rgba(240, 113, 120, 0.15); color: var(--err); }
+    .card-actions { margin-top: 0.75rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .meta { font-size: 0.85rem; color: var(--muted); }
+    .meta strong { color: var(--text); font-weight: 600; }
+    .regions { margin-top: 0.5rem; font-size: 0.8rem; color: var(--muted); }
+    .error-line { margin-top: 0.5rem; color: var(--err); font-size: 0.8rem; }
+    .token-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .token-row input {
+      background: #121820;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      min-width: 180px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>CCI Scraper Fleet</h1>
+      <div class="muted" id="updated">Loading…</div>
+    </div>
+    <div class="token-row">
+      <label class="muted" for="token">Download token (optional)</label>
+      <input id="token" type="password" placeholder="DASHBOARD_TOKEN" autocomplete="off" />
+    </div>
+  </header>
+
+  <main>
+    <section class="summary">
+      <div class="stat"><div class="label">Total records</div><div class="value" id="totalRecords">—</div></div>
+      <div class="stat"><div class="label">Instances</div><div class="value" id="instanceCount">—</div></div>
+      <div class="stat"><div class="label">Running</div><div class="value" id="runningCount">—</div></div>
+      <div class="stat"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
+    </section>
+
+    <section class="downloads">
+      <h2>Download scraped data</h2>
+      <div class="btn-row">
+        <a class="btn primary" id="btnDownload" href="/api/download">Download cci-agents.csv</a>
+      </div>
+      <p class="muted" style="margin: 0.75rem 0 0;">
+        One shared file with all regions/instances. Always the latest data on disk — download anytime while scraping.
+      </p>
+    </section>
+
+    <section class="grid" id="instances"></section>
+  </main>
+
+  <script>
+    const tokenInput = document.getElementById('token');
+    tokenInput.value = localStorage.getItem('cci_dashboard_token') || '';
+    tokenInput.addEventListener('change', () => {
+      localStorage.setItem('cci_dashboard_token', tokenInput.value.trim());
+      refreshDownload();
+    });
+
+    function tokenQuery() {
+      const t = tokenInput.value.trim();
+      return t ? `?token=${encodeURIComponent(t)}` : '';
+    }
+
+    function formatUptime(ms) {
+      const s = Math.floor(ms / 1000);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${sec}s`;
+      return `${sec}s`;
+    }
+
+    function badgeClass(status) {
+      if (status === 'running') return 'running';
+      if (status === 'restarting') return 'restarting';
+      if (status === 'done') return 'done';
+      if (status === 'failed') return 'failed';
+      return 'stopped';
+    }
+
+    function authHeaders() {
+      const t = tokenInput.value.trim();
+      return t ? { 'X-Dashboard-Token': t } : {};
+    }
+
+    function refreshDownload() {
+      document.getElementById('btnDownload').href = '/api/download' + tokenQuery();
+    }
+
+    async function resumeInstance(id, btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`/api/instances/${id}/resume`, {
+          method: 'POST',
+          headers: { ...authHeaders() },
+        });
+        const data = await res.json();
+        if (!data.ok) alert(data.error || 'Resume failed');
+        await tick();
+      } catch (err) {
+        alert('Resume request failed — is the fleet running?');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function tick() {
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store' });
+        const data = await res.json();
+        document.getElementById('totalRecords').textContent = data.totalRecords?.toLocaleString() ?? '0';
+        document.getElementById('instanceCount').textContent = data.instanceCount ?? 0;
+        const running = (data.instances || []).filter((i) => i.processStatus === 'running').length;
+        document.getElementById('runningCount').textContent = running;
+        document.getElementById('uptime').textContent = formatUptime(data.uptimeMs || 0);
+        document.getElementById('updated').textContent = `Updated ${new Date(data.updatedAt).toLocaleString()}`;
+
+        const root = document.getElementById('instances');
+        root.innerHTML = '';
+        for (const inst of data.instances || []) {
+          const card = document.createElement('article');
+          card.className = 'card';
+          const completed = (inst.completedRegions || []).length;
+          const assigned = (inst.regions || []).length;
+          const canResume = inst.processStatus !== 'running';
+          card.innerHTML = `
+            <div class="card-head">
+              <h3>${inst.id}</h3>
+              <span class="badge ${badgeClass(inst.processStatus)}">${inst.processStatus}</span>
+            </div>
+            <div class="meta">
+              <strong>${(inst.recordCount || 0).toLocaleString()}</strong> records (this instance)
+              · regions done <strong>${completed}/${assigned}</strong>
+              · resumes <strong>${inst.restarts || 0}</strong>
+            </div>
+            <div class="meta" style="margin-top:0.35rem">
+              Current: <strong>${inst.currentRegion || '—'}</strong>
+              page <strong>${inst.currentPage ?? '—'}</strong>
+            </div>
+            <div class="regions">Assigned: ${(inst.regions || []).join(', ')}</div>
+            ${inst.lastError ? `<div class="error-line">${inst.lastError}</div>` : ''}
+            <div class="card-actions">
+              <button type="button" class="btn primary" data-resume="${inst.id}" ${canResume ? '' : 'disabled'}>
+                ${canResume ? 'Resume from checkpoint' : 'Running…'}
+              </button>
+            </div>
+          `;
+          root.appendChild(card);
+        }
+
+        root.querySelectorAll('[data-resume]').forEach((btn) => {
+          btn.addEventListener('click', () => resumeInstance(btn.getAttribute('data-resume'), btn));
+        });
+
+        refreshDownload();
+      } catch (err) {
+        document.getElementById('updated').textContent = 'Failed to load status — is the fleet running?';
+      }
+    }
+
+    refreshDownload();
+    tick();
+    setInterval(tick, 5000);
+  </script>
+</body>
+</html>

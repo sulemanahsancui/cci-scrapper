@@ -2,7 +2,7 @@
 
 Scrapes professional real estate agent cards, attestations, and receipts from [cci.fr/agent-immobilier](https://www.cci.fr/agent-immobilier) across all French regions.
 
-Runs as a **5-instance fleet** on Contabo Windows Server (24/7), with crash resume and a simple HTML dashboard for monitoring and CSV download.
+Runs as a **7-instance fleet** on Contabo Windows Server (24/7), with crash resume and a simple HTML dashboard for monitoring and CSV download.
 
 ---
 
@@ -29,7 +29,7 @@ TWO_CAPTCHA_API_KEY=your_key_here
 node scripts/reset-cci-run.js --yes
 ```
 
-5. Start the fleet (5 scrapers + dashboard):
+5. Start the fleet (7 scrapers + dashboard):
 
 ```bat
 node run-cci-fleet.js
@@ -39,6 +39,22 @@ node run-cci-fleet.js
 
 `http://localhost:8787/`  
 (or `http://<server-public-ip>:8787/` — allow port **8787** in Windows Firewall)
+
+---
+
+## Contabo recovery (false "done" / upgrade)
+
+If regions show `done` too early, or after pulling a new code version:
+
+```bat
+node scripts/reopen-regions.js --all
+node run-cci-fleet.js
+```
+
+- **CSV is kept** — already scraped URLs are skipped
+- Progress “completed” flags are cleared; work resumes from last page/city
+- On every start the scraper also **auto-heals** any `completedRegions` that lack proof (`exhausted` + sensible listing counts)
+- An instance that still has unfinished assigned regions **exits failed** (not fake `done`) — use dashboard **Resume**
 
 ---
 
@@ -64,10 +80,15 @@ CCI_HEADLESS=false
 4. If an instance **fails**, dashboard shows `failed` — client clicks **Resume from checkpoint**
 5. Anytime, client clicks **Download cci-agents.csv** — one shared file with all scraped data
 
+**Completion rules (no fake done):**
+- A region is complete only when pagination is **exhausted** (short/empty last page) and listing counts are not far below the site “X résultats” total
+- Full page (~32) but next page fails → **not** complete → resume later
+- Stale regions from an old fleet split are pruned automatically
+
 **Data safety (crash / resume):**
 - **One file:** all 7 instances append to `output/cci-agents.csv` (cross-process lock)
 - **Never overwrite** existing rows — only `appendFile`
-- **Per-instance progress** in `output/<id>/cci-progress.json` (URLs, region, city, page, completed cities)
+- **Per-instance progress** in `output/<id>/cci-progress.json` (URLs, region, city, page, completed cities, regionStats)
 - On restart / Resume: reload progress + scan CSV URLs → skip already scraped → continue from last city/page
 
 ### 24/7 on Windows reboot
@@ -125,6 +146,7 @@ node scripts/merge-cci-output.js
 npm run fleet
 npm run fleet:reset
 npm run fleet:merge
+node scripts/reopen-regions.js --all
 node run-cci-instance.js --id s1
 ```
 

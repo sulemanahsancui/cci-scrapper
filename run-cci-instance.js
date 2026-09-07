@@ -54,8 +54,16 @@ async function main() {
   });
 
   console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}`);
-  await scraper.run();
-  console.log(`[${id}] finished`);
+  try {
+    await scraper.run();
+    console.log(`[${id}] finished`);
+  } catch (err) {
+    if (err?.code === 'INCOMPLETE_REGIONS') {
+      console.error(`[${id}] incomplete — ${err.message}`);
+      process.exit(2);
+    }
+    throw err;
+  }
 }
 
 main().catch((err) => {

@@ -107,6 +107,8 @@ export class CciFrScraper extends BaseScraper {
     // City-by-city mode (IDF / Occitanie): { 'ILE-DE-FRANCE': ['paris', ...], ... }
     this._completedCities  = {};
     this._currentCity      = null;
+    // Proof of completion per region — used to auto-heal false "done" flags
+    this._regionStats      = {};
   }
 
   // ── Browser init ─────────────────────────────────────────────────────────────
@@ -135,6 +137,16 @@ export class CciFrScraper extends BaseScraper {
     await this._waitForPage();
     await this._scrapeAllRegions();
 
+    const unfinished = this._unfinishedAssignedRegions();
+    if (unfinished.length) {
+      const msg = `Instance incomplete — regions still open: ${unfinished.join(', ')}`;
+      logger.error(msg, { unfinished });
+      // Non-zero so fleet shows "failed" (not false "done") and client can Resume
+      const err = new Error(msg);
+      err.code = 'INCOMPLETE_REGIONS';
+      throw err;
+    }
+
     logger.info(`Done — ${this._count} records saved`, { file: this._outputCsv });
   }
 
@@ -155,11 +167,8 @@ export class CciFrScraper extends BaseScraper {
     const ordered = this._orderRegions(regionValues);
 
     for (const region of ordered) {
-      const alreadyDone = [...this._completedRegions].some(
-        (r) => normalizeRegionKey(r) === normalizeRegionKey(region.label),
-      );
-      if (alreadyDone) {
-        logger.info('Skipping already-completed region', { label: region.label });
+      if (this._isRegionMarkedComplete(region.label)) {
+        logger.info('Skipping already-completed region (verified)', { label: region.label });
         continue;
       }
 
@@ -174,7 +183,9 @@ export class CciFrScraper extends BaseScraper {
 
       // Resume from the exact page: currentRegion has priority (live checkpoint),
       // then pageCheckpoints (manually pre-set), then default to page 1.
-      const isResumingRegion = this._currentRegion === region.label && this._currentPage > 1;
+      const sameRegion =
+        normalizeRegionKey(this._currentRegion) === normalizeRegionKey(region.label);
+      const isResumingRegion = sameRegion && this._currentPage > 1 && this._currentPageUrl;
       const startPage = isResumingRegion
         ? this._currentPage
         : (this._pageCheckpoints[region.label] ?? 1);
@@ -217,10 +228,12 @@ export class CciFrScraper extends BaseScraper {
         }
       }
 
-      const { listingsSeen } = await this._scrapeAllPages(region.label, startPage);
+      const { listingsSeen, exhausted, expectedTotal } = await this._scrapeAllPages(region.label, startPage);
 
       // Never mark complete when this pass saw zero listing links (avoids false-complete)
       if (listingsSeen === 0) {
+        this._rememberRegionStats(region.label, { exhausted: false, listingsSeen, expectedTotal });
+        await this._flushProgress();
         logger.warn('Region NOT marked complete — zero listings seen this pass', {
           label: region.label,
           totalSaved: this._count,
@@ -228,8 +241,48 @@ export class CciFrScraper extends BaseScraper {
         continue;
       }
 
-      await this._saveRegionComplete(region.label);
-      logger.info('Region complete', { label: region.label, listingsSeen, totalSaved: this._count });
+      // Full last page but pager failed → region is NOT done (do not mark complete)
+      if (!exhausted) {
+        this._rememberRegionStats(region.label, { exhausted: false, listingsSeen, expectedTotal });
+        await this._flushProgress();
+        logger.warn('Region NOT marked complete — pagination stopped early (will resume later)', {
+          label: region.label,
+          listingsSeen,
+          expectedTotal,
+          totalSaved: this._count,
+        });
+        // Stop instance loop so we resume THIS region next time (don't skip ahead)
+        return;
+      }
+
+      // Only compare to site total on a fresh pass from page 1 (resume passes see a partial count)
+      if (startPage <= 1 && !this._countsLookComplete(listingsSeen, expectedTotal)) {
+        this._rememberRegionStats(region.label, { exhausted: false, listingsSeen, expectedTotal });
+        await this._flushProgress();
+        logger.warn('Region NOT marked complete — listings far below site total', {
+          label: region.label,
+          listingsSeen,
+          expectedTotal,
+        });
+        return;
+      }
+
+      const provenSeen =
+        startPage > 1 && expectedTotal != null
+          ? expectedTotal
+          : listingsSeen;
+
+      await this._saveRegionComplete(region.label, {
+        exhausted: true,
+        listingsSeen: provenSeen,
+        expectedTotal,
+      });
+      logger.info('Region complete', {
+        label: region.label,
+        listingsSeen: provenSeen,
+        expectedTotal,
+        totalSaved: this._count,
+      });
     }
   }
 
@@ -358,8 +411,25 @@ export class CciFrScraper extends BaseScraper {
       }
 
       // Reuse normal pagination + detail scrape; CSV region column stays regionLabel
-      const { listingsSeen } = await this._scrapeAllPages(regionLabel, startPage);
+      const { listingsSeen, exhausted, expectedTotal } = await this._scrapeAllPages(regionLabel, startPage);
       regionListings += listingsSeen;
+
+      if (!exhausted && listingsSeen > 0) {
+        // Keep city as current checkpoint — do NOT mark city done
+        this._rememberRegionStats(regionLabel, {
+          exhausted: false,
+          listingsSeen: regionListings,
+          expectedTotal,
+        });
+        logger.warn('City NOT marked complete — pagination stopped early (will resume)', {
+          region: regionLabel,
+          city: cityName,
+          listingsSeen,
+          expectedTotal,
+        });
+        await this._flushProgress();
+        return; // stop region loop; resume this city next run
+      }
 
       // Empty city is OK (small towns) — still mark city done so we move on
       done.add(slug);
@@ -379,7 +449,13 @@ export class CciFrScraper extends BaseScraper {
     }
 
     if (done.size >= cities.length) {
-      await this._saveRegionComplete(regionLabel);
+      await this._saveRegionComplete(regionLabel, {
+        exhausted: true,
+        listingsSeen: regionListings,
+        expectedTotal: null,
+        citiesDone: done.size,
+        citiesTotal: cities.length,
+      });
       logger.info('City-search region complete', {
         region: regionLabel,
         cities: cities.length,
@@ -397,9 +473,19 @@ export class CciFrScraper extends BaseScraper {
 
   // ── Pagination loop ───────────────────────────────────────────────────────────
 
+  /**
+   * Scrape every results page.
+   * Returns exhausted=true only when we truly reached the end (empty page or
+   * short last page). If the last page was full (~32) but next failed, exhausted=false
+   * so the region/city is NOT marked complete.
+   * Also reads site "X résultats" when present (expectedTotal).
+   */
   async _scrapeAllPages(regionLabel, startPage = 1) {
     let pageNum = startPage;
     let listingsSeen = 0;
+    let lastPageCount = 0;
+    let expectedTotal = null;
+    const PAGE_SIZE = 32;
 
     while (true) {
       logger.info(`Scraping page ${pageNum}`, { region: regionLabel });
@@ -412,13 +498,47 @@ export class CciFrScraper extends BaseScraper {
       // Keep currentCity if set (city-search mode) — do not clear on page advance
       await this._flushProgress();
 
-      const pageListings = await this._scrapeResultsPage(regionLabel, pageNum);
-      listingsSeen += pageListings;
+      const fromSite = await this._readExpectedTotal();
+      if (fromSite != null) {
+        expectedTotal = fromSite;
+        this._rememberRegionStats(regionLabel, {
+          exhausted: false,
+          listingsSeen,
+          expectedTotal,
+        });
+      }
 
+      lastPageCount = await this._scrapeResultsPage(regionLabel, pageNum);
+      listingsSeen += lastPageCount;
+
+      if (lastPageCount === 0) {
+        logger.info('Empty results page — end of list', {
+          region: regionLabel,
+          pages: pageNum,
+          expectedTotal,
+        });
+        return { listingsSeen, exhausted: true, expectedTotal };
+      }
+
+      // Prefer URL ?page= N+1 (reliable). Fall back to clicking "next".
       const advanced = await this._goToNextPage();
       if (!advanced) {
-        logger.info('No more pages', { region: regionLabel, pages: pageNum });
-        break;
+        if (lastPageCount >= PAGE_SIZE) {
+          logger.warn('Full page of results but could not open next page — NOT exhausted', {
+            region: regionLabel,
+            page: pageNum,
+            lastPageCount,
+            expectedTotal,
+          });
+          return { listingsSeen, exhausted: false, expectedTotal };
+        }
+        logger.info('Last short page — end of list', {
+          region: regionLabel,
+          pages: pageNum,
+          lastPageCount,
+          expectedTotal,
+        });
+        return { listingsSeen, exhausted: true, expectedTotal };
       }
 
       pageNum++;
@@ -426,12 +546,42 @@ export class CciFrScraper extends BaseScraper {
 
       const hasResults = await this.page.$('tr.lien-fiche').catch(() => null);
       if (!hasResults) {
-        logger.info('Next page has no results — end of region', { region: regionLabel, pages: pageNum });
-        break;
+        // Navigated "next" but no rows — real end (or CF). If previous was full, verify once.
+        if (lastPageCount >= PAGE_SIZE) {
+          // Might be CF / slow load — wait and recheck
+          await this._waitForPage();
+          const again = await this.page.$('tr.lien-fiche').catch(() => null);
+          if (!again) {
+            logger.warn('Next page empty after full page — treating as NOT exhausted (retry later)', {
+              region: regionLabel,
+              page: pageNum,
+              expectedTotal,
+            });
+            return { listingsSeen, exhausted: false, expectedTotal };
+          }
+        } else {
+          logger.info('Next page has no results — end of region', {
+            region: regionLabel,
+            pages: pageNum,
+            expectedTotal,
+          });
+          return { listingsSeen, exhausted: true, expectedTotal };
+        }
       }
     }
+  }
 
-    return { listingsSeen };
+  /** Parse "20 946 résultats" (or similar) from the results page. */
+  async _readExpectedTotal() {
+    try {
+      const text = await this.page.evaluate(() => document.body?.innerText || '');
+      const m = text.match(/([\d\s\u00a0\.]+)\s*r[ée]sultats?/i);
+      if (!m) return null;
+      const n = parseInt(String(m[1]).replace(/[\s\u00a0\.]/g, ''), 10);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    } catch {
+      return null;
+    }
   }
 
   _pageFromUrl(url) {
@@ -443,6 +593,18 @@ export class CciFrScraper extends BaseScraper {
       return Number.isFinite(n) ? n + 1 : null;
     } catch {
       return null;
+    }
+  }
+
+  /** Drupal 0-based page index from current URL (default 0). */
+  _drupalPageIndex(url = this.page?.url?.() || '') {
+    try {
+      const page = new URL(url).searchParams.get('page');
+      if (page == null || page === '') return 0;
+      const n = parseInt(page, 10);
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      return 0;
     }
   }
 
@@ -542,7 +704,29 @@ export class CciFrScraper extends BaseScraper {
 
   // ── Next page navigation ──────────────────────────────────────────────────────
 
+  /**
+   * Advance results pager. Prefer rewriting ?page= (Drupal 0-based) — more reliable
+   * than clicking after many detail navigations. Falls back to the next link.
+   */
   async _goToNextPage() {
+    try {
+      const currentUrl = this.page.url();
+      const nextIdx = this._drupalPageIndex(currentUrl) + 1;
+      const nextUrl = new URL(currentUrl);
+      // Only use URL strategy when we are clearly on a search-results URL
+      if (nextUrl.pathname.includes('agent-immobilier') && (nextUrl.searchParams.has('state_recherche') || nextUrl.searchParams.has('city') || nextUrl.searchParams.has('code_region') || nextUrl.searchParams.has('page'))) {
+        nextUrl.searchParams.set('page', String(nextIdx));
+        const before = currentUrl;
+        await this.page.goto(nextUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await this.cloudflareHandler.bypass(this.page);
+        // If goto somehow bounced to same listing-less page, try click fallback
+        if (this.page.url() === before) return false;
+        return true;
+      }
+    } catch (err) {
+      logger.warn('URL next-page failed, trying click', { error: err.message });
+    }
+
     try {
       const next = await this.page.$(
         'li.pager__item--next a, .pager-next a, a[rel="next"], a[title*="suivant" i], a[title*="next" i]',
@@ -582,6 +766,7 @@ export class CciFrScraper extends BaseScraper {
     this._knownUrls        = new Set();
     this._completedRegions = new Set();
     this._completedCities  = {};
+    this._regionStats      = {};
     this._currentRegion    = null;
     this._currentCity      = null;
     this._currentPage      = 1;
@@ -596,17 +781,21 @@ export class CciFrScraper extends BaseScraper {
       this._scrapedUrls      = new Set(progress.urls ?? (Array.isArray(progress) ? progress : []));
       this._completedRegions = new Set(progress.completedRegions ?? []);
       this._completedCities  = progress.completedCities ?? {};
+      this._regionStats      = progress.regionStats ?? {};
       this._currentRegion    = progress.currentRegion   ?? null;
       this._currentCity      = progress.currentCity     ?? null;
       this._currentPage      = progress.currentPage     ?? 1;
       this._currentPageUrl   = progress.currentPageUrl  ?? null;
       this._pageCheckpoints  = progress.pageCheckpoints ?? {};
       for (const u of this._scrapedUrls) this._knownUrls.add(u);
+      this._pruneProgressToAssignedRegions();
+      this._healFalseCompletes();
       logger.info(`Resuming — ${this._scrapedUrls.size} URLs in progress file`, {
         currentRegion:    this._currentRegion,
         currentCity:      this._currentCity,
         currentPage:      this._currentPage,
-        completedRegions: this._completedRegions.size,
+        completedRegions: [...this._completedRegions],
+        regionStats:      this._regionStats,
       });
     } catch {
       logger.info('No progress file yet — starting fresh progress tracker');
@@ -639,6 +828,169 @@ export class CciFrScraper extends BaseScraper {
     }
 
     this._count = this._scrapedUrls.size;
+  }
+
+  /**
+   * Drop stale completedRegions / currentRegion left over from an older fleet
+   * split (e.g. s5 used to include PAYS DE LA LOIRE). Keeps URLs + CSV intact.
+   */
+  _pruneProgressToAssignedRegions() {
+    if (!this._onlyRegions?.length) return;
+
+    const assigned = this._onlyRegions.map((r) => normalizeRegionKey(r));
+    const matchesAssigned = (label) => {
+      const n = normalizeRegionKey(label);
+      return assigned.some((a) => n.includes(a) || a.includes(n));
+    };
+
+    const before = [...this._completedRegions];
+    this._completedRegions = new Set(before.filter(matchesAssigned));
+    const dropped = before.filter((r) => !this._completedRegions.has(r));
+
+    if (this._currentRegion && !matchesAssigned(this._currentRegion)) {
+      logger.warn('Clearing stale currentRegion not in this instance assignment', {
+        currentRegion: this._currentRegion,
+        onlyRegions: this._onlyRegions,
+      });
+      this._currentRegion  = null;
+      this._currentCity    = null;
+      this._currentPage    = 1;
+      this._currentPageUrl = null;
+    }
+
+    // Keep only completedCities keys that belong to assigned city-search regions
+    const nextCities = {};
+    for (const [key, list] of Object.entries(this._completedCities || {})) {
+      if (assigned.some((a) => key.includes(a) || a.includes(key))) {
+        nextCities[key] = list;
+      }
+    }
+    this._completedCities = nextCities;
+
+    // Drop regionStats for regions we no longer own
+    const nextStats = {};
+    for (const [key, stats] of Object.entries(this._regionStats || {})) {
+      if (assigned.some((a) => key.includes(a) || a.includes(key))) {
+        nextStats[key] = stats;
+      }
+    }
+    this._regionStats = nextStats;
+
+    if (dropped.length) {
+      logger.warn('Pruned stale completedRegions from old fleet config', { dropped });
+      this._flushProgress().catch(() => {});
+    }
+  }
+
+  /**
+   * Auto-reopen false "done" flags. Old progress files often marked regions
+   * complete without proof (exhausted). Client must not see fake done again.
+   */
+  _healFalseCompletes() {
+    const kept = [];
+    const reopened = [];
+
+    for (const label of this._completedRegions) {
+      if (this._isRegionTrulyComplete(label)) {
+        kept.push(label);
+      } else {
+        reopened.push(label);
+      }
+    }
+
+    if (!reopened.length) return;
+
+    this._completedRegions = new Set(kept);
+    for (const label of reopened) {
+      const key = normalizeRegionKey(label);
+      if (this._regionStats[key]) {
+        this._regionStats[key] = {
+          ...this._regionStats[key],
+          exhausted: false,
+          healedAt: new Date().toISOString(),
+        };
+      }
+      // City-search: clear city checklist so we re-walk (URLs still skipped via CSV)
+      if (isCitySearchRegion(label)) {
+        this._completedCities[key] = [];
+      }
+    }
+
+    logger.warn('Auto-reopened false completedRegions (no exhausted proof / count mismatch)', {
+      reopened,
+      kept,
+    });
+    this._flushProgress().catch(() => {});
+  }
+
+  _rememberRegionStats(label, stats) {
+    const key = normalizeRegionKey(label);
+    this._regionStats[key] = {
+      ...(this._regionStats[key] || {}),
+      ...stats,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  _isTinyRegion(label) {
+    const k = normalizeRegionKey(label);
+    return [
+      'MAYOTTE',
+      'CORSE',
+      'GUADELOUPE',
+      'GUYANE',
+      'MARTINIQUE',
+      'REUNION',
+      'COLLECTIVITES',
+    ].some((t) => k.includes(t));
+  }
+
+  /** Site total vs listings seen this pass (or stored). Allow 15% slack. */
+  _countsLookComplete(listingsSeen, expectedTotal) {
+    if (expectedTotal == null || expectedTotal <= 0) return true;
+    // City mode: expectedTotal is per-city; don't block region complete on one city count
+    return listingsSeen >= expectedTotal * 0.85;
+  }
+
+  _isRegionTrulyComplete(label) {
+    const key = normalizeRegionKey(label);
+    const stats = this._regionStats[key];
+
+    // City-search: need exhausted + all cities done (or legacy complete without cities → heal)
+    if (isCitySearchRegion(label)) {
+      if (!stats?.exhausted) return false;
+      const citiesDone = (this._completedCities[key] || []).length;
+      // If we have city checklist, require it non-empty as proof of work
+      if (citiesDone === 0 && (stats.listingsSeen || 0) === 0) return false;
+      return true;
+    }
+
+    // Region dropdown: must have explicit exhausted=true proof
+    if (!stats?.exhausted) return false;
+
+    if (stats.expectedTotal != null && stats.expectedTotal > 0) {
+      if ((stats.listingsSeen || 0) < stats.expectedTotal * 0.85) return false;
+    } else if (!this._isTinyRegion(label) && (stats.listingsSeen || 0) < 200) {
+      // Large mainland region with almost no listings + no site total → untrustworthy
+      return false;
+    }
+
+    return true;
+  }
+
+  _isRegionMarkedComplete(label) {
+    const n = normalizeRegionKey(label);
+    const inSet = [...this._completedRegions].some((r) => {
+      const a = normalizeRegionKey(r);
+      return a === n || a.includes(n) || n.includes(a);
+    });
+    if (!inSet) return false;
+    return this._isRegionTrulyComplete(label);
+  }
+
+  _unfinishedAssignedRegions() {
+    if (!this._onlyRegions?.length) return [];
+    return this._onlyRegions.filter((wanted) => !this._isRegionMarkedComplete(wanted));
   }
 
   /** Read url column from existing CSV so restarts never re-insert known rows. */
@@ -705,7 +1057,13 @@ export class CciFrScraper extends BaseScraper {
     this._count = this._scrapedUrls.size;
   }
 
-  async _saveRegionComplete(regionLabel) {
+  async _saveRegionComplete(regionLabel, stats = {}) {
+    this._rememberRegionStats(regionLabel, {
+      exhausted: true,
+      listingsSeen: stats.listingsSeen ?? this._regionStats[normalizeRegionKey(regionLabel)]?.listingsSeen ?? 0,
+      expectedTotal: stats.expectedTotal ?? null,
+      ...stats,
+    });
     this._completedRegions.add(regionLabel);
     // Clear page / city checkpoint — this region is done
     this._currentRegion  = null;
@@ -722,6 +1080,7 @@ export class CciFrScraper extends BaseScraper {
       urls:             [...this._scrapedUrls],
       completedRegions: [...this._completedRegions],
       completedCities:  this._completedCities,
+      regionStats:      this._regionStats,
       currentRegion:    this._currentRegion,
       currentCity:      this._currentCity,
       currentPage:      this._currentPage,

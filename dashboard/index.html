@@ -231,8 +231,8 @@
         for (const inst of data.instances || []) {
           const card = document.createElement('article');
           card.className = 'card';
-          const completed = (inst.completedRegions || []).length;
           const assigned = (inst.regions || []).length;
+          const completed = (inst.completedRegions || []).length;
           const canResume = inst.processStatus !== 'running';
           card.innerHTML = `
             <div class="card-head">
@@ -247,9 +247,10 @@
             <div class="meta" style="margin-top:0.35rem">
               Current: <strong>${inst.currentRegion || '—'}</strong>
               ${inst.currentCity ? `city <strong>${inst.currentCity}</strong>` : ''}
-              page <strong>${inst.currentPage ?? '—'}</strong>
+              ${inst.currentRegion ? `page <strong>${inst.currentPage ?? '—'}</strong>` : ''}
             </div>
-            <div class="regions">Assigned: ${(inst.regions || []).join(', ')}</div>
+            <div class="regions">Assigned: ${(inst.regions || []).join(', ') || '—'}</div>
+            <div class="regions">Completed: ${(inst.completedRegions || []).join(', ') || '—'}</div>
             ${inst.lastError ? `<div class="error-line">${inst.lastError}</div>` : ''}
             <div class="card-actions">
               <button type="button" class="btn primary" data-resume="${inst.id}" ${canResume ? '' : 'disabled'}>

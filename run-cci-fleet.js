@@ -54,6 +54,23 @@ async function countSharedCsvRows() {
   }
 }
 
+function normRegion(s) {
+  return String(s || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function regionMatches(label, wantedList) {
+  const n = normRegion(label);
+  return (wantedList || []).some((w) => {
+    const a = normRegion(w);
+    return n.includes(a) || a.includes(n);
+  });
+}
+
 async function buildStatus() {
   const instances = [];
   const totalRecords = await countSharedCsvRows();
@@ -68,21 +85,27 @@ async function buildStatus() {
     };
     const progress = await readProgress(cfg.id);
     const recordCount = progress?.recordCount ?? progress?.urls?.length ?? 0;
+    const assigned = cfg.onlyRegions || [];
+    const completedAll = progress?.completedRegions ?? [];
+    const completedAssigned = completedAll.filter((r) => regionMatches(r, assigned));
+    const currentRegion = progress?.currentRegion ?? null;
+    const currentBelongs = currentRegion && regionMatches(currentRegion, assigned);
 
     instances.push({
       id: cfg.id,
-      regions: cfg.onlyRegions,
+      regions: assigned,
       processStatus: runtime.status,
       restarts: runtime.restarts,
       lastExit: runtime.lastExit,
       lastError: runtime.lastError,
       processStartedAt: runtime.startedAt,
       recordCount,
-      completedRegions: progress?.completedRegions ?? [],
-      currentRegion: progress?.currentRegion ?? null,
-      currentCity: progress?.currentCity ?? null,
-      currentPage: progress?.currentPage ?? null,
-      currentPageUrl: progress?.currentPageUrl ?? null,
+      completedRegions: completedAssigned,
+      completedRegionsRaw: completedAll,
+      currentRegion: currentBelongs ? currentRegion : null,
+      currentCity: currentBelongs ? (progress?.currentCity ?? null) : null,
+      currentPage: currentBelongs ? (progress?.currentPage ?? null) : null,
+      currentPageUrl: currentBelongs ? (progress?.currentPageUrl ?? null) : null,
       progressUpdatedAt: progress?.updatedAt ?? null,
       completedCities: progress?.completedCities ?? {},
     });

@@ -246,6 +246,7 @@
             </div>
             <div class="meta" style="margin-top:0.35rem">
               Current: <strong>${inst.currentRegion || '—'}</strong>
+              ${inst.currentCity ? `city <strong>${inst.currentCity}</strong>` : ''}
               page <strong>${inst.currentPage ?? '—'}</strong>
             </div>
             <div class="regions">Assigned: ${(inst.regions || []).join(', ')}</div>

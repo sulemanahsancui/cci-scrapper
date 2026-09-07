@@ -16,6 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const outputRoot = path.join(root, 'output');
 const browserRoot = path.join(root, 'browser-data');
+const fleetConfigPath = path.join(root, 'src', 'config', 'cci-fleet.json');
 
 const args = new Set(process.argv.slice(2));
 const wipeBrowser = args.has('--browser');
@@ -35,6 +36,15 @@ async function confirm() {
   return /^y(es)?$/i.test(answer.trim());
 }
 
+async function instanceIds() {
+  try {
+    const fleet = JSON.parse(await fs.readFile(fleetConfigPath, 'utf8'));
+    return (fleet.instances || []).map((i) => i.id);
+  } catch {
+    return ['city-idf', 'city-occ', 's1', 's2', 's3', 's4', 's5'];
+  }
+}
+
 async function main() {
   const ok = await confirm();
   if (!ok) {
@@ -42,8 +52,9 @@ async function main() {
     process.exit(0);
   }
 
-  // New fleet dirs
-  for (const id of ['s1', 's2', 's3', 's4', 's5']) {
+  const ids = await instanceIds();
+
+  for (const id of ids) {
     await rmrf(path.join(outputRoot, id));
   }
 
@@ -61,7 +72,7 @@ async function main() {
   }
 
   if (wipeBrowser) {
-    for (const id of ['s1', 's2', 's3', 's4', 's5']) {
+    for (const id of ids) {
       await rmrf(path.join(browserRoot, `cci-session-${id}`));
     }
     await rmrf(path.join(browserRoot, 'cci-session'));
@@ -69,7 +80,7 @@ async function main() {
   }
 
   await fs.mkdir(outputRoot, { recursive: true });
-  console.log('Fleet output cleared. Ready for a fresh run: node run-cci-fleet.js');
+  console.log(`Fleet output cleared (${ids.join(', ')}). Ready: node run-cci-fleet.js`);
 }
 
 main().catch((err) => {

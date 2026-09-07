@@ -59,12 +59,16 @@ CCI_HEADLESS=false
 ## How it runs
 
 1. Start **one script**: `node run-cci-fleet.js`
-2. That starts **all 5 instances** and the dashboard on port **8787**
-3. Each instance saves progress under `output/s1` … `output/s5`
-4. If an instance **fails**, dashboard shows `failed` — client clicks **Resume from checkpoint** (continues from last saved URL/page)
-5. Anytime, client clicks **Download cci-agents.csv** — one shared file with all scraped data (append-only; download works while scrapers run)
+2. That starts **7 instances** (2 city-search + 5 region) and the dashboard on port **8787**
+3. Each instance saves progress under `output/<instance-id>/`
+4. If an instance **fails**, dashboard shows `failed` — client clicks **Resume from checkpoint**
+5. Anytime, client clicks **Download cci-agents.csv** — one shared file with all scraped data
 
-**Data safety:** All 5 instances append into **`output/cci-agents.csv`** (file lock). Restart / Resume never deletes rows. Only `node scripts/reset-cci-run.js` clears output.
+**Data safety (crash / resume):**
+- **One file:** all 7 instances append to `output/cci-agents.csv` (cross-process lock)
+- **Never overwrite** existing rows — only `appendFile`
+- **Per-instance progress** in `output/<id>/cci-progress.json` (URLs, region, city, page, completed cities)
+- On restart / Resume: reload progress + scan CSV URLs → skip already scraped → continue from last city/page
 
 ### 24/7 on Windows reboot
 
@@ -74,19 +78,30 @@ CCI_HEADLESS=false
 
 ---
 
-## Region split (5 instances)
+## Region split (7 instances)
 
 Configured in [`src/config/cci-fleet.json`](src/config/cci-fleet.json):
 
-| Instance | Regions |
-|---|---|
-| s1 | AUVERGNE-RHONE-ALPES, CORSE, COLLECTIVITES D'OUTRE-MER, MAYOTTE |
-| s2 | ILE-DE-FRANCE, GUADELOUPE, GUYANE, MARTINIQUE, LA REUNION |
-| s3 | OCCITANIE, BRETAGNE, CENTRE-VAL DE LOIRE |
-| s4 | GRAND EST, HAUTS-DE-FRANCE, BOURGOGNE-FRANCHE-COMTE |
-| s5 | NOUVELLE-AQUITAINE, NORMANDIE, PAYS DE LA LOIRE, PROVENCE-ALPES-COTE D'AZUR |
+| Instance | Mode | Regions |
+|---|---|---|
+| **city-idf** | city URL search | ILE-DE-FRANCE (all communes, one by one) |
+| **city-occ** | city URL search | OCCITANIE (all communes, one by one) |
+| **s1** | region dropdown | AUVERGNE-RHONE-ALPES, CORSE, COLLECTIVITES D'OUTRE-MER, MAYOTTE |
+| **s2** | region dropdown | GUADELOUPE, GUYANE, MARTINIQUE, LA REUNION, BOURGOGNE-FRANCHE-COMTE |
+| **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE |
+| **s4** | region dropdown | GRAND EST, NORMANDIE, PAYS DE LA LOIRE |
+| **s5** | region dropdown | NOUVELLE-AQUITAINE, PROVENCE-ALPES-COTE D'AZUR |
 
-Edit that file to change partitions. RAM tip: 5 Chromium instances need about **16 GB+**.
+RAM tip: 7 Chromium windows need about **16–32 GB**.
+
+### City search (ILE-DE-FRANCE + OCCITANIE)
+
+Dedicated instances `city-idf` / `city-occ` use:
+
+`https://www.cci.fr/agent-immobilier?city=montpellier`
+
+Cities come from Excel **Commune** column → [`data/cities/city-search.csv`](data/cities/city-search.csv).  
+Each city is scraped fully; after all cities that instance is done. `s1`–`s5` run normal region-by-region dropdown scraping in parallel.
 
 ---
 

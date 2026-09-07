@@ -2,6 +2,18 @@
   "statusPort": 8787,
   "instances": [
     {
+      "id": "city-idf",
+      "onlyRegions": [
+        "ILE-DE-FRANCE"
+      ]
+    },
+    {
+      "id": "city-occ",
+      "onlyRegions": [
+        "OCCITANIE"
+      ]
+    },
+    {
       "id": "s1",
       "onlyRegions": [
         "AUVERGNE-RHONE-ALPES",
@@ -13,35 +25,33 @@
     {
       "id": "s2",
       "onlyRegions": [
-        "ILE-DE-FRANCE",
         "GUADELOUPE",
         "GUYANE",
         "MARTINIQUE",
-        "LA REUNION"
+        "LA REUNION",
+        "BOURGOGNE-FRANCHE-COMTE"
       ]
     },
     {
       "id": "s3",
       "onlyRegions": [
-        "OCCITANIE",
         "BRETAGNE",
-        "CENTRE-VAL DE LOIRE"
+        "CENTRE-VAL DE LOIRE",
+        "HAUTS-DE-FRANCE"
       ]
     },
     {
       "id": "s4",
       "onlyRegions": [
         "GRAND EST",
-        "HAUTS-DE-FRANCE",
-        "BOURGOGNE-FRANCHE-COMTE"
+        "NORMANDIE",
+        "PAYS DE LA LOIRE"
       ]
     },
     {
       "id": "s5",
       "onlyRegions": [
         "NOUVELLE-AQUITAINE",
-        "NORMANDIE",
-        "PAYS DE LA LOIRE",
         "PROVENCE-ALPES-COTE D'AZUR"
       ]
     }

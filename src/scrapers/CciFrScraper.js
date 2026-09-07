@@ -16,6 +16,13 @@ import BrowserManager        from '../core/browser/BrowserManager.js';
 import { parseAgentRecord }  from './parsers/CciParser.js';
 import { retry }             from '../utils/retry.js';
 import { withFileLock }      from '../fleet/csvLock.js';
+import {
+  isCitySearchRegion,
+  citiesForRegion,
+  citySearchUrl,
+  cityToQuery,
+  normalizeRegionKey,
+} from '../fleet/cityLists.js';
 import logger                from '../logger/index.js';
 
 const BASE_URL              = 'https://www.cci.fr/agent-immobilier';
@@ -97,6 +104,9 @@ export class CciFrScraper extends BaseScraper {
     this._count            = 0;
     // All URLs already in the shared CSV (this instance + others) — skip only, not flushed
     this._knownUrls        = new Set();
+    // City-by-city mode (IDF / Occitanie): { 'ILE-DE-FRANCE': ['paris', ...], ... }
+    this._completedCities  = {};
+    this._currentCity      = null;
   }
 
   // ── Browser init ─────────────────────────────────────────────────────────────
@@ -138,23 +148,28 @@ export class CciFrScraper extends BaseScraper {
         .filter((o) => o.value !== ''),
     );
 
-    logger.info(`Found ${regionValues.length} regions`);
+    logger.info(`Found ${regionValues.length} regions on site`);
 
-    for (const region of regionValues) {
-      if (this._completedRegions.has(region.label)) {
+    // Process in fleet onlyRegions order (not dropdown order), so city-search
+    // regions finish completely before anything else on that instance.
+    const ordered = this._orderRegions(regionValues);
+
+    for (const region of ordered) {
+      const alreadyDone = [...this._completedRegions].some(
+        (r) => normalizeRegionKey(r) === normalizeRegionKey(region.label),
+      );
+      if (alreadyDone) {
         logger.info('Skipping already-completed region', { label: region.label });
         continue;
       }
 
-      if (this._onlyRegions) {
-        const label = region.label.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const match = this._onlyRegions.some(
-          (r) => label.includes(r.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')),
-        );
-        if (!match) {
-          logger.info('Skipping region (not in onlyRegions list)', { label: region.label });
-          continue;
-        }
+      // OCCITANIE + ILE-DE-FRANCE: dropdown fails — scrape every city, then region done
+      if (isCitySearchRegion(region.label)) {
+        logger.info('Starting city-by-city region (will finish all cities before next region)', {
+          label: region.label,
+        });
+        await this._scrapeRegionByCities(region.label);
+        continue;
       }
 
       // Resume from the exact page: currentRegion has priority (live checkpoint),
@@ -218,6 +233,168 @@ export class CciFrScraper extends BaseScraper {
     }
   }
 
+  /** Match site dropdown options to onlyRegions, preserving fleet config order. */
+  _orderRegions(regionValues) {
+    const norm = (s) =>
+      String(s || '')
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!this._onlyRegions?.length) return regionValues;
+
+    const ordered = [];
+    const used = new Set();
+
+    for (const wanted of this._onlyRegions) {
+      const w = norm(wanted);
+      const match = regionValues.find((r) => {
+        if (used.has(r.label)) return false;
+        const label = norm(r.label);
+        return label.includes(w) || w.includes(label);
+      });
+      if (match) {
+        used.add(match.label);
+        ordered.push(match);
+      } else if (isCitySearchRegion(wanted)) {
+        // City-search region may still run even if label matching is awkward
+        ordered.push({ value: '', label: wanted });
+      } else {
+        logger.warn('Region in onlyRegions not found on site dropdown', { wanted });
+      }
+    }
+
+    logger.info('Region order for this instance', {
+      order: ordered.map((r) => r.label),
+    });
+    return ordered;
+  }
+
+  /**
+   * City-by-city scrape for regions where the dropdown returns nothing
+   * (ILE-DE-FRANCE, OCCITANIE). Same pagination + detail flow; only the
+   * entry URL changes: https://www.cci.fr/agent-immobilier?city=montpellier
+   *
+   * All cities are scraped one-by-one; region is marked complete only after
+   * the full city list is done — then the instance moves to the next region.
+   */
+  async _scrapeRegionByCities(regionLabel) {
+    const regionKey = normalizeRegionKey(regionLabel);
+    const cities = await citiesForRegion(regionLabel);
+
+    if (!cities.length) {
+      logger.error('No cities configured for city-search region — add rows to data/cities/city-search.csv', {
+        region: regionLabel,
+      });
+      return;
+    }
+
+    if (!this._completedCities[regionKey]) this._completedCities[regionKey] = [];
+    const done = new Set(this._completedCities[regionKey]);
+
+    logger.info('City-search region — scraping city by city', {
+      region: regionLabel,
+      cities: cities.length,
+      alreadyDone: done.size,
+    });
+
+    let regionListings = 0;
+
+    for (const cityName of cities) {
+      const slug = cityToQuery(cityName);
+      if (!slug) continue;
+
+      if (done.has(slug)) {
+        logger.info('Skipping completed city', { region: regionLabel, city: cityName, slug });
+        continue;
+      }
+
+      const cityUrl = citySearchUrl(cityName, BASE_URL);
+      const sameRegion =
+        normalizeRegionKey(this._currentRegion) === normalizeRegionKey(regionLabel);
+      const isResumingCity =
+        sameRegion &&
+        this._currentCity === slug &&
+        Boolean(this._currentPageUrl);
+
+      const startPage = isResumingCity ? (this._currentPage || 1) : 1;
+      const startPageUrl = isResumingCity ? this._currentPageUrl : null;
+
+      logger.info('Processing city', {
+        region: regionLabel,
+        city: cityName,
+        slug,
+        url: cityUrl,
+        startPage,
+        resume: Boolean(startPageUrl),
+      });
+
+      // Persist city checkpoint before any navigation (crash-safe resume)
+      this._currentRegion = regionLabel;
+      this._currentCity   = slug;
+      if (!startPageUrl) {
+        this._currentPage    = 1;
+        this._currentPageUrl = cityUrl;
+      }
+      await this._flushProgress();
+
+      if (startPageUrl) {
+        logger.info('Resuming city from saved page URL', { city: cityName, url: startPageUrl });
+        await this.page.goto(startPageUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await this.cloudflareHandler.bypass(this.page);
+        await this._waitForPage();
+      } else {
+        await this.page.goto(cityUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await this.cloudflareHandler.bypass(this.page);
+        await this._waitForPage();
+
+        for (let p = 1; p < startPage; p++) {
+          const advanced = await this._goToNextPage();
+          if (!advanced) break;
+          await this._waitForPage();
+        }
+      }
+
+      // Reuse normal pagination + detail scrape; CSV region column stays regionLabel
+      const { listingsSeen } = await this._scrapeAllPages(regionLabel, startPage);
+      regionListings += listingsSeen;
+
+      // Empty city is OK (small towns) — still mark city done so we move on
+      done.add(slug);
+      this._completedCities[regionKey] = [...done];
+      this._currentCity    = null;
+      this._currentPage    = 1;
+      this._currentPageUrl = null;
+      await this._flushProgress();
+
+      logger.info('City complete', {
+        region: regionLabel,
+        city: cityName,
+        listingsSeen,
+        citiesDone: done.size,
+        citiesTotal: cities.length,
+      });
+    }
+
+    if (done.size >= cities.length) {
+      await this._saveRegionComplete(regionLabel);
+      logger.info('City-search region complete', {
+        region: regionLabel,
+        cities: cities.length,
+        listingsSeen: regionListings,
+        totalSaved: this._count,
+      });
+    } else {
+      logger.warn('City-search region not fully complete yet', {
+        region: regionLabel,
+        done: done.size,
+        total: cities.length,
+      });
+    }
+  }
+
   // ── Pagination loop ───────────────────────────────────────────────────────────
 
   async _scrapeAllPages(regionLabel, startPage = 1) {
@@ -232,6 +409,7 @@ export class CciFrScraper extends BaseScraper {
       this._currentPageUrl = this.page.url();
       this._currentPage    = this._pageFromUrl(this._currentPageUrl) ?? pageNum;
       pageNum = this._currentPage;
+      // Keep currentCity if set (city-search mode) — do not clear on page advance
       await this._flushProgress();
 
       const pageListings = await this._scrapeResultsPage(regionLabel, pageNum);
@@ -403,7 +581,9 @@ export class CciFrScraper extends BaseScraper {
     this._scrapedUrls      = new Set();
     this._knownUrls        = new Set();
     this._completedRegions = new Set();
+    this._completedCities  = {};
     this._currentRegion    = null;
+    this._currentCity      = null;
     this._currentPage      = 1;
     this._currentPageUrl   = null;
     this._pageCheckpoints  = {};
@@ -415,13 +595,16 @@ export class CciFrScraper extends BaseScraper {
       const progress = JSON.parse(raw);
       this._scrapedUrls      = new Set(progress.urls ?? (Array.isArray(progress) ? progress : []));
       this._completedRegions = new Set(progress.completedRegions ?? []);
+      this._completedCities  = progress.completedCities ?? {};
       this._currentRegion    = progress.currentRegion   ?? null;
+      this._currentCity      = progress.currentCity     ?? null;
       this._currentPage      = progress.currentPage     ?? 1;
       this._currentPageUrl   = progress.currentPageUrl  ?? null;
       this._pageCheckpoints  = progress.pageCheckpoints ?? {};
       for (const u of this._scrapedUrls) this._knownUrls.add(u);
       logger.info(`Resuming — ${this._scrapedUrls.size} URLs in progress file`, {
         currentRegion:    this._currentRegion,
+        currentCity:      this._currentCity,
         currentPage:      this._currentPage,
         completedRegions: this._completedRegions.size,
       });
@@ -431,6 +614,7 @@ export class CciFrScraper extends BaseScraper {
 
     // 2) Shared CSV is append-only. Create header only if missing.
     //    Scan existing URLs so other instances' rows are not re-inserted.
+    //    Crash/resume never truncates this file — only appendFile is used.
     const csvExists = await fs.access(this._outputCsv).then(() => true).catch(() => false);
     if (!csvExists) {
       await fs.writeFile(this._outputCsv, CSV_COLUMNS.join(',') + '\n', { flag: 'wx' }).catch(async (err) => {
@@ -441,10 +625,16 @@ export class CciFrScraper extends BaseScraper {
     } else {
       const fromCsv = await this._urlsFromExistingCsv();
       for (const u of fromCsv) this._knownUrls.add(u);
-      logger.info('Shared CSV exists — append only (never overwrite)', {
+      logger.info('Shared CSV exists — append only, resume will skip known URLs', {
         file: this._outputCsv,
         urlsInCsv: fromCsv.size,
         knownUrls: this._knownUrls.size,
+        completedCities: Object.fromEntries(
+          Object.entries(this._completedCities).map(([k, v]) => [k, v.length]),
+        ),
+        currentRegion: this._currentRegion,
+        currentCity: this._currentCity,
+        currentPage: this._currentPage,
       });
     }
 
@@ -517,8 +707,9 @@ export class CciFrScraper extends BaseScraper {
 
   async _saveRegionComplete(regionLabel) {
     this._completedRegions.add(regionLabel);
-    // Clear page checkpoint — this region is done
+    // Clear page / city checkpoint — this region is done
     this._currentRegion  = null;
+    this._currentCity    = null;
     this._currentPage    = 1;
     this._currentPageUrl = null;
     await this._flushProgress();
@@ -530,7 +721,9 @@ export class CciFrScraper extends BaseScraper {
       instanceId:       this._instanceId,
       urls:             [...this._scrapedUrls],
       completedRegions: [...this._completedRegions],
+      completedCities:  this._completedCities,
       currentRegion:    this._currentRegion,
+      currentCity:      this._currentCity,
       currentPage:      this._currentPage,
       currentPageUrl:   this._currentPageUrl,
       pageCheckpoints:  this._pageCheckpoints,

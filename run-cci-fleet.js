@@ -80,9 +80,11 @@ async function buildStatus() {
       recordCount,
       completedRegions: progress?.completedRegions ?? [],
       currentRegion: progress?.currentRegion ?? null,
+      currentCity: progress?.currentCity ?? null,
       currentPage: progress?.currentPage ?? null,
       currentPageUrl: progress?.currentPageUrl ?? null,
       progressUpdatedAt: progress?.updatedAt ?? null,
+      completedCities: progress?.completedCities ?? {},
     });
   }
 

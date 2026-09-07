@@ -50,7 +50,7 @@ async function main() {
     // One shared CSV for all instances (same as before)
     outputCsv:    path.resolve(__dirname, 'output', 'cci-agents.csv'),
     userDataDir:  path.resolve(__dirname, 'browser-data', `cci-session-${id}`),
-    headless:     process.env.CCI_HEADLESS !== 'false',
+    headless:     process.env.CCI_HEADLESS === 'true',
   });
 
   console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}`);

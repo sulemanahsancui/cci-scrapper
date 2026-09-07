@@ -75,7 +75,7 @@ export class CciFrScraper extends BaseScraper {
       browserManager: new BrowserManager({
         engine:      'playwright',
         type:        'chromium',
-        headless:    options.headless ?? (process.env.CCI_HEADLESS !== 'false'),
+        headless:    options.headless ?? (process.env.CCI_HEADLESS === 'true'),
         stealth:     true,
         userDataDir: options.userDataDir ?? DEFAULT_USER_DATA_DIR,
         slowMo:      options.slowMo ?? 50,

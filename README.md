@@ -51,8 +51,7 @@ Optional:
 
 ```env
 DASHBOARD_TOKEN=some-secret
-CCI_STATUS_PORT=8787
-CCI_HEADLESS=true
+CCI_HEADLESS=false
 ```
 
 ---

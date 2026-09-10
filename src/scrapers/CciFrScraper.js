@@ -414,21 +414,28 @@ export class CciFrScraper extends BaseScraper {
       const { listingsSeen, exhausted, expectedTotal } = await this._scrapeAllPages(regionLabel, startPage);
       regionListings += listingsSeen;
 
-      if (!exhausted && listingsSeen > 0) {
-        // Keep city as current checkpoint — do NOT mark city done
-        this._rememberRegionStats(regionLabel, {
-          exhausted: false,
-          listingsSeen: regionListings,
+      const coverageDone = this._coverageLooksComplete(listingsSeen, expectedTotal, startPage);
+
+      // City mode must never soft-lock on one commune (Uzès, Montpellier, …).
+      // If pager is unclear but we already saw listings, mark city done and move on.
+      // Missing a rare last page is better than Resume looping forever on the same city.
+      if (!exhausted && listingsSeen > 0 && !coverageDone) {
+        logger.warn('City pagination unclear — marking city complete and continuing to next city', {
+          region: regionLabel,
+          city: cityName,
+          slug,
+          listingsSeen,
           expectedTotal,
+          startPage,
         });
-        logger.warn('City NOT marked complete — pagination stopped early (will resume)', {
+      } else if (!exhausted && coverageDone) {
+        logger.info('City treated complete — listings cover site total despite pager stop', {
           region: regionLabel,
           city: cityName,
           listingsSeen,
           expectedTotal,
+          startPage,
         });
-        await this._flushProgress();
-        return; // stop region loop; resume this city next run
       }
 
       // Empty city is OK (small towns) — still mark city done so we move on
@@ -524,13 +531,59 @@ export class CciFrScraper extends BaseScraper {
       const advanced = await this._goToNextPage();
       if (!advanced) {
         if (lastPageCount >= PAGE_SIZE) {
+          // Retry once — transient nav failures are common after many detail page hops
+          await this.pause(2000, 3500);
+          const retried = await this._goToNextPage();
+          if (retried) {
+            pageNum++;
+            await this._waitForPage();
+            const hasAfterRetry = await this.page.$('tr.lien-fiche').catch(() => null);
+            if (!hasAfterRetry) {
+              const decided = await this._decideAfterEmptyNextPage({
+                regionLabel,
+                pageNum,
+                lastPageCount,
+                listingsSeen,
+                expectedTotal,
+              });
+              if (decided.continueScraping) continue;
+              return decided.result;
+            }
+            // Has results — loop will scrape this page
+            continue;
+          }
+
+          const total = expectedTotal ?? await this._readExpectedTotal();
+          if (this._coverageLooksComplete(listingsSeen, total, startPage)) {
+            logger.info('Could not open next page but coverage matches site total — end of list', {
+              region: regionLabel,
+              page: pageNum,
+              listingsSeen,
+              expectedTotal: total,
+            });
+            return { listingsSeen, exhausted: true, expectedTotal: total };
+          }
+
+          // City searches: no next link after a full page usually means exact N*32 end
+          // and the URL pager already tried past the end — mark city done so we move on
+          if (this._currentCity || isCitySearchRegion(regionLabel)) {
+            logger.info('City mode: no next page after full page — treating as end of city', {
+              region: regionLabel,
+              city: this._currentCity,
+              page: pageNum,
+              lastPageCount,
+              expectedTotal: total,
+            });
+            return { listingsSeen, exhausted: true, expectedTotal: total };
+          }
+
           logger.warn('Full page of results but could not open next page — NOT exhausted', {
             region: regionLabel,
             page: pageNum,
             lastPageCount,
-            expectedTotal,
+            expectedTotal: total,
           });
-          return { listingsSeen, exhausted: false, expectedTotal };
+          return { listingsSeen, exhausted: false, expectedTotal: total };
         }
         logger.info('Last short page — end of list', {
           region: regionLabel,
@@ -546,29 +599,103 @@ export class CciFrScraper extends BaseScraper {
 
       const hasResults = await this.page.$('tr.lien-fiche').catch(() => null);
       if (!hasResults) {
-        // Navigated "next" but no rows — real end (or CF). If previous was full, verify once.
         if (lastPageCount >= PAGE_SIZE) {
-          // Might be CF / slow load — wait and recheck
-          await this._waitForPage();
-          const again = await this.page.$('tr.lien-fiche').catch(() => null);
-          if (!again) {
-            logger.warn('Next page empty after full page — treating as NOT exhausted (retry later)', {
-              region: regionLabel,
-              page: pageNum,
-              expectedTotal,
-            });
-            return { listingsSeen, exhausted: false, expectedTotal };
-          }
-        } else {
-          logger.info('Next page has no results — end of region', {
-            region: regionLabel,
-            pages: pageNum,
+          const decided = await this._decideAfterEmptyNextPage({
+            regionLabel,
+            pageNum,
+            lastPageCount,
+            listingsSeen,
             expectedTotal,
           });
-          return { listingsSeen, exhausted: true, expectedTotal };
+          if (decided.continueScraping) continue;
+          return decided.result;
         }
+        logger.info('Next page has no results — end of region', {
+          region: regionLabel,
+          pages: pageNum,
+          expectedTotal,
+        });
+        return { listingsSeen, exhausted: true, expectedTotal };
       }
     }
+  }
+
+  /**
+   * After navigating to "next" and finding zero rows: either real end (exact
+   * multiple of page size) or a transient empty (CF / slow load).
+   * Applies to every city-search commune — not a one-off for a single town.
+   */
+  async _decideAfterEmptyNextPage({
+    regionLabel,
+    pageNum,
+    lastPageCount,
+    listingsSeen,
+    expectedTotal,
+  }) {
+    await this._waitForPage();
+    let again = await this.page.$('tr.lien-fiche').catch(() => null);
+    if (!again) {
+      await this.cloudflareHandler.bypass(this.page);
+      await this._waitForPage();
+      again = await this.page.$('tr.lien-fiche').catch(() => null);
+    }
+    if (again) {
+      logger.info('Next page loaded after wait — continuing', { region: regionLabel, page: pageNum });
+      return { continueScraping: true };
+    }
+
+    const total = expectedTotal ?? await this._readExpectedTotal();
+
+    // Exact boundary e.g. 96 results = 3 full pages → page 4 is empty = DONE
+    if (total != null && listingsSeen >= Math.floor(total * 0.9)) {
+      logger.info('Next page empty — listings cover site total, end of list', {
+        region: regionLabel,
+        page: pageNum,
+        listingsSeen,
+        expectedTotal: total,
+        lastPageCount,
+      });
+      return {
+        continueScraping: false,
+        result: { listingsSeen, exhausted: true, expectedTotal: total },
+      };
+    }
+
+    // All city-search communes (IDF + Occitanie): empty next after a full page
+    // is treated as end of that city so the fleet always advances.
+    if (this._currentCity || isCitySearchRegion(regionLabel)) {
+      logger.info('City mode: empty next after full page — end of city', {
+        region: regionLabel,
+        city: this._currentCity,
+        page: pageNum,
+        listingsSeen,
+        expectedTotal: total,
+        lastPageCount,
+      });
+      return {
+        continueScraping: false,
+        result: { listingsSeen, exhausted: true, expectedTotal: total },
+      };
+    }
+
+    logger.warn('Next page empty after full page — NOT exhausted (will retry later)', {
+      region: regionLabel,
+      page: pageNum,
+      expectedTotal: total,
+      listingsSeen,
+    });
+    return {
+      continueScraping: false,
+      result: { listingsSeen, exhausted: false, expectedTotal: total },
+    };
+  }
+
+  /** Whether listingsSeen (this pass, or estimated with startPage) covers site total. */
+  _coverageLooksComplete(listingsSeen, expectedTotal, startPage = 1) {
+    if (expectedTotal == null || expectedTotal <= 0) return false;
+    const estimated =
+      startPage > 1 ? (startPage - 1) * 32 + listingsSeen : listingsSeen;
+    return estimated >= expectedTotal * 0.9;
   }
 
   /** Parse "20 946 résultats" (or similar) from the results page. */

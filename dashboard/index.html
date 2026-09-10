@@ -249,7 +249,7 @@
               ${inst.currentCity ? `city <strong>${inst.currentCity}</strong>` : ''}
               ${inst.currentRegion ? `page <strong>${inst.currentPage ?? '—'}</strong>` : ''}
             </div>
-            <div class="regions">Assigned: ${(inst.regions || []).join(', ') || '—'}</div>
+            <div class="regions">Assigned: ${(inst.regions || []).join(', ') || '—'}${inst.cityShard ? ` · city shard ${inst.cityShard.index + 1}/${inst.cityShard.of}` : ''}</div>
             <div class="regions">Completed: ${(inst.completedRegions || []).join(', ') || '—'}</div>
             ${inst.lastError ? `<div class="error-line">${inst.lastError}</div>` : ''}
             <div class="card-actions">

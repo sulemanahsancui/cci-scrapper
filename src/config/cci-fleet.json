@@ -5,7 +5,11 @@
       "id": "city-idf",
       "onlyRegions": [
         "ILE-DE-FRANCE"
-      ]
+      ],
+      "cityShard": {
+        "of": 2,
+        "index": 0
+      }
     },
     {
       "id": "city-occ",
@@ -23,14 +27,12 @@
     {
       "id": "s2",
       "onlyRegions": [
-        "GUADELOUPE",
-        "GUYANE",
-        "MARTINIQUE",
-        "LA REUNION",
-        "BOURGOGNE-FRANCHE-COMTE",
-        "CORSE",
-        "MAYOTTE"
-      ]
+        "ILE-DE-FRANCE"
+      ],
+      "cityShard": {
+        "of": 2,
+        "index": 1
+      }
     },
     {
       "id": "s3",

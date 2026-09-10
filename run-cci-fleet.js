@@ -94,6 +94,7 @@ async function buildStatus() {
     instances.push({
       id: cfg.id,
       regions: assigned,
+      cityShard: cfg.cityShard ?? null,
       processStatus: runtime.status,
       restarts: runtime.restarts,
       lastExit: runtime.lastExit,

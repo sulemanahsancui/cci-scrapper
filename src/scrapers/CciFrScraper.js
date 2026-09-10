@@ -22,6 +22,7 @@ import {
   citySearchUrl,
   cityToQuery,
   normalizeRegionKey,
+  applyCityShard,
 } from '../fleet/cityLists.js';
 import logger                from '../logger/index.js';
 
@@ -93,6 +94,7 @@ export class CciFrScraper extends BaseScraper {
     this._progressFile = path.resolve(options.progressFile ?? DEFAULT_PROGRESS_FILE);
     // If set, only process regions whose label matches one of these strings (case-insensitive partial match)
     this._onlyRegions  = options.onlyRegions ?? null;
+    this._cityShard    = options.cityShard ?? null;
     this._instanceId   = options.instanceId ?? null;
 
     this._scrapedUrls      = new Set();
@@ -167,17 +169,25 @@ export class CciFrScraper extends BaseScraper {
     const ordered = this._orderRegions(regionValues);
 
     for (const region of ordered) {
-      if (this._isRegionMarkedComplete(region.label)) {
-        logger.info('Skipping already-completed region (verified)', { label: region.label });
+      // City-search always enters the city loop (shard may have been rebalanced)
+      if (isCitySearchRegion(region.label)) {
+        if (this._isRegionMarkedComplete(region.label)) {
+          // Fast path: still verify inside in case cityShard changed
+          logger.info('City-search region already marked complete — verifying shard', {
+            label: region.label,
+            cityShard: this._cityShard,
+          });
+        }
+        logger.info('Starting city-by-city region (will finish all cities before next region)', {
+          label: region.label,
+          cityShard: this._cityShard,
+        });
+        await this._scrapeRegionByCities(region.label);
         continue;
       }
 
-      // OCCITANIE + ILE-DE-FRANCE: dropdown fails — scrape every city, then region done
-      if (isCitySearchRegion(region.label)) {
-        logger.info('Starting city-by-city region (will finish all cities before next region)', {
-          label: region.label,
-        });
-        await this._scrapeRegionByCities(region.label);
+      if (this._isRegionMarkedComplete(region.label)) {
+        logger.info('Skipping already-completed region (verified)', { label: region.label });
         continue;
       }
 
@@ -335,23 +345,82 @@ export class CciFrScraper extends BaseScraper {
    */
   async _scrapeRegionByCities(regionLabel) {
     const regionKey = normalizeRegionKey(regionLabel);
-    const cities = await citiesForRegion(regionLabel);
+    const allCities = await citiesForRegion(regionLabel);
+    const cities = applyCityShard(allCities, this._cityShard);
+    const shardSlugs = new Set(cities.map((c) => cityToQuery(c)).filter(Boolean));
 
     if (!cities.length) {
       logger.error('No cities configured for city-search region — add rows to data/cities/city-search.csv', {
         region: regionLabel,
+        cityShard: this._cityShard,
       });
       return;
     }
 
+    // Only count cities in THIS shard as done (avoids false "region complete"
+    // when progress still lists cities from the other half).
     if (!this._completedCities[regionKey]) this._completedCities[regionKey] = [];
-    const done = new Set(this._completedCities[regionKey]);
+    const done = new Set(
+      (this._completedCities[regionKey] || []).filter((s) => shardSlugs.has(s)),
+    );
+
+    if (this._currentCity && !shardSlugs.has(this._currentCity)) {
+      logger.warn('Clearing currentCity outside this instance cityShard', {
+        currentCity: this._currentCity,
+        cityShard: this._cityShard,
+      });
+      this._currentCity    = null;
+      this._currentPage    = 1;
+      this._currentPageUrl = null;
+    }
 
     logger.info('City-search region — scraping city by city', {
       region: regionLabel,
-      cities: cities.length,
+      citiesInShard: cities.length,
+      citiesTotal: allCities.length,
+      cityShard: this._cityShard,
       alreadyDone: done.size,
+      firstCity: cities[0],
+      lastCity: cities[cities.length - 1],
     });
+
+    // If previously marked complete but this shard still has cities left, reopen
+    if (done.size < cities.length) {
+      const before = [...this._completedRegions];
+      this._completedRegions = new Set(
+        before.filter((r) => {
+          const a = normalizeRegionKey(r);
+          return !(a === regionKey || a.includes(regionKey) || regionKey.includes(a));
+        }),
+      );
+      if (before.length !== this._completedRegions.size) {
+        logger.warn('Reopened city-search region — shard still has unfinished cities', {
+          region: regionLabel,
+          cityShard: this._cityShard,
+          done: done.size,
+          citiesInShard: cities.length,
+        });
+        this._rememberRegionStats(regionLabel, { exhausted: false });
+        await this._flushProgress();
+      }
+    } else if (done.size >= cities.length && cities.length > 0) {
+      logger.info('City-search shard already fully done', {
+        region: regionLabel,
+        cityShard: this._cityShard,
+        cities: cities.length,
+      });
+      if (!this._isRegionMarkedComplete(regionLabel)) {
+        await this._saveRegionComplete(regionLabel, {
+          exhausted: true,
+          listingsSeen: 0,
+          expectedTotal: null,
+          citiesDone: done.size,
+          citiesTotal: cities.length,
+          cityShard: this._cityShard,
+        });
+      }
+      return;
+    }
 
     let regionListings = 0;
 
@@ -438,7 +507,7 @@ export class CciFrScraper extends BaseScraper {
         });
       }
 
-      // Empty city is OK (small towns) — still mark city done so we move on
+      // Persist only shard-local completed city slugs for this region
       done.add(slug);
       this._completedCities[regionKey] = [...done];
       this._currentCity    = null;
@@ -452,6 +521,7 @@ export class CciFrScraper extends BaseScraper {
         listingsSeen,
         citiesDone: done.size,
         citiesTotal: cities.length,
+        cityShard: this._cityShard,
       });
     }
 
@@ -462,10 +532,13 @@ export class CciFrScraper extends BaseScraper {
         expectedTotal: null,
         citiesDone: done.size,
         citiesTotal: cities.length,
+        cityShard: this._cityShard,
       });
-      logger.info('City-search region complete', {
+      logger.info('City-search region complete (this shard)', {
         region: regionLabel,
         cities: cities.length,
+        citiesTotal: allCities.length,
+        cityShard: this._cityShard,
         listingsSeen: regionListings,
         totalSaved: this._count,
       });
@@ -474,6 +547,7 @@ export class CciFrScraper extends BaseScraper {
         region: regionLabel,
         done: done.size,
         total: cities.length,
+        cityShard: this._cityShard,
       });
     }
   }

@@ -97,6 +97,27 @@ export async function citiesForRegion(regionLabel, csvPath = DEFAULT_CSV) {
   return [];
 }
 
+/**
+ * Split a city list across fleet instances.
+ * Contiguous shards: { of: 2, index: 0 } → first half, { of: 2, index: 1 } → second half.
+ */
+export function applyCityShard(cities, shard) {
+  if (!shard || cities == null) return cities || [];
+  const of = Number(shard.of);
+  const index = Number(shard.index);
+  if (!Number.isFinite(of) || of < 1) {
+    throw new Error(`Invalid cityShard.of: ${JSON.stringify(shard)}`);
+  }
+  if (!Number.isFinite(index) || index < 0 || index >= of) {
+    throw new Error(`Invalid cityShard.index: ${JSON.stringify(shard)}`);
+  }
+  if (of === 1) return [...cities];
+  const n = cities.length;
+  const start = Math.floor((n * index) / of);
+  const end = Math.floor((n * (index + 1)) / of);
+  return cities.slice(start, end);
+}
+
 function splitCsvLine(line) {
   const out = [];
   let field = '';
@@ -129,4 +150,5 @@ export default {
   citySearchUrl,
   loadCitySearchLists,
   citiesForRegion,
+  applyCityShard,
 };

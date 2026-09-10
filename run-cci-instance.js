@@ -46,6 +46,7 @@ async function main() {
   const scraper = new CciFrScraper({
     instanceId:   id,
     onlyRegions:  instance.onlyRegions,
+    cityShard:    instance.cityShard ?? null,
     progressFile: path.join(outputDir, 'cci-progress.json'),
     // One shared CSV for all instances (same as before)
     outputCsv:    path.resolve(__dirname, 'output', 'cci-agents.csv'),
@@ -53,7 +54,10 @@ async function main() {
     headless:     process.env.CCI_HEADLESS === 'true',
   });
 
-  console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}`);
+  const shardInfo = instance.cityShard
+    ? ` cityShard ${instance.cityShard.index + 1}/${instance.cityShard.of}`
+    : '';
+  console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}${shardInfo}`);
   try {
     await scraper.run();
     console.log(`[${id}] finished`);

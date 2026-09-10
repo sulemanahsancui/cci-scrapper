@@ -107,11 +107,13 @@ Configured in [`src/config/cci-fleet.json`](src/config/cci-fleet.json):
 |---|---|---|
 | **city-idf** | city URL search | ILE-DE-FRANCE (all communes, one by one) |
 | **city-occ** | city URL search | OCCITANIE (all communes, one by one) |
-| **s1** | region dropdown | AUVERGNE-RHONE-ALPES, CORSE, COLLECTIVITES D'OUTRE-MER, MAYOTTE |
-| **s2** | region dropdown | GUADELOUPE, GUYANE, MARTINIQUE, LA REUNION, BOURGOGNE-FRANCHE-COMTE |
-| **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE |
-| **s4** | region dropdown | GRAND EST, NORMANDIE, PAYS DE LA LOIRE |
+| **s1** | region dropdown | AUVERGNE-RHONE-ALPES, COLLECTIVITES D'OUTRE-MER |
+| **s2** | region dropdown | GUADELOUPE, GUYANE, MARTINIQUE, LA REUNION, BOURGOGNE-FRANCHE-COMTE, **CORSE**, **MAYOTTE** |
+| **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE, **PAYS DE LA LOIRE** |
+| **s4** | region dropdown | GRAND EST, NORMANDIE |
 | **s5** | region dropdown | NOUVELLE-AQUITAINE, PROVENCE-ALPES-COTE D'AZUR |
+
+*(Rebalanced: finished s2/s3 took leftover regions from s1/s4 so mid-scrape instances keep their current region progress.)*
 
 RAM tip: 7 Chromium windows need about **16–32 GB**.
 

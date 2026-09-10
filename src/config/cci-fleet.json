@@ -17,9 +17,7 @@
       "id": "s1",
       "onlyRegions": [
         "AUVERGNE-RHONE-ALPES",
-        "CORSE",
-        "COLLECTIVITES D'OUTRE-MER",
-        "MAYOTTE"
+        "COLLECTIVITES D'OUTRE-MER"
       ]
     },
     {
@@ -29,7 +27,9 @@
         "GUYANE",
         "MARTINIQUE",
         "LA REUNION",
-        "BOURGOGNE-FRANCHE-COMTE"
+        "BOURGOGNE-FRANCHE-COMTE",
+        "CORSE",
+        "MAYOTTE"
       ]
     },
     {
@@ -37,15 +37,15 @@
       "onlyRegions": [
         "BRETAGNE",
         "CENTRE-VAL DE LOIRE",
-        "HAUTS-DE-FRANCE"
+        "HAUTS-DE-FRANCE",
+        "PAYS DE LA LOIRE"
       ]
     },
     {
       "id": "s4",
       "onlyRegions": [
         "GRAND EST",
-        "NORMANDIE",
-        "PAYS DE LA LOIRE"
+        "NORMANDIE"
       ]
     },
     {

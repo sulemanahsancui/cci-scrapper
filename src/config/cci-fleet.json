@@ -7,8 +7,8 @@
         "OCCITANIE"
       ],
       "cityShard": {
-        "of": 2,
-        "index": 1
+        "of": 12,
+        "index": 8
       }
     },
     {
@@ -17,16 +17,19 @@
         "OCCITANIE"
       ],
       "cityShard": {
-        "of": 2,
-        "index": 0
+        "of": 12,
+        "index": 9
       }
     },
     {
       "id": "s1",
       "onlyRegions": [
-        "AUVERGNE-RHONE-ALPES",
-        "COLLECTIVITES D'OUTRE-MER"
-      ]
+        "OCCITANIE"
+      ],
+      "cityShard": {
+        "of": 12,
+        "index": 10
+      }
     },
     {
       "id": "s2",
@@ -34,8 +37,8 @@
         "ILE-DE-FRANCE"
       ],
       "cityShard": {
-        "of": 2,
-        "index": 1
+        "of": 8,
+        "index": 7
       }
     },
     {
@@ -50,9 +53,12 @@
     {
       "id": "s4",
       "onlyRegions": [
-        "GRAND EST",
-        "NORMANDIE"
-      ]
+        "OCCITANIE"
+      ],
+      "cityShard": {
+        "of": 12,
+        "index": 11
+      }
     },
     {
       "id": "s5",

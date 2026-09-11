@@ -105,21 +105,21 @@ Configured in [`src/config/cci-fleet.json`](src/config/cci-fleet.json):
 
 | Instance | Mode | Regions |
 |---|---|---|
-| **city-occ** | city URL search | OCCITANIE **shard 1/2** (first ~2120 communes) |
-| **city-idf** | city URL search | OCCITANIE **shard 2/2** (second ~2121 communes) |
-| **s2** | city URL search | ILE-DE-FRANCE **shard 2/2** (second ~631 communes) |
-| **s1** | region dropdown | AUVERGNE-RHONE-ALPES, COLLECTIVITES D'OUTRE-MER |
+| **city-idf** | city URL search | OCCITANIE **shard 9/12** (finish current slice ≈ Ade → Asté, ~36 left) |
+| **city-occ** | city URL search | OCCITANIE **shard 10/12** (~354 communes, fresh) |
+| **s1** | city URL search | OCCITANIE **shard 11/12** (~353 communes, fresh) |
+| **s4** | city URL search | OCCITANIE **shard 12/12** (~354 communes, fresh) |
+| **s2** | city URL search | ILE-DE-FRANCE **shard 8/8** (continue Ermont → end) |
 | **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE, PAYS DE LA LOIRE |
-| **s4** | region dropdown | GRAND EST, NORMANDIE |
 | **s5** | region dropdown | NOUVELLE-AQUITAINE, PROVENCE-ALPES-COTE D'AZUR |
 
-*(Rebalanced: free `city-idf` now shares Occitanie with `city-occ`. IDF shard 1/2 already done; `s2` keeps IDF shard 2/2.)*
+*(Rebalanced: free city-occ / s1 / s4 take remaining Occitanie tail. s3 keeps Pays de la Loire; s5 keeps PACA.)*
 
 RAM tip: 7 Chromium windows need about **16–32 GB**.
 
 ### City search (ILE-DE-FRANCE + OCCITANIE)
 
-Dedicated instances use `?city=` search. Occitanie is split: `city-occ` = shard 1/2, `city-idf` = shard 2/2.
+Dedicated instances use `?city=` search. Occitanie remaining work is split across **city-idf / city-occ / s1 / s4** (shards 9–12 of 12). IDF tail stays on **s2** (shard 8/8).
 
 `https://www.cci.fr/agent-immobilier?city=montpellier`
 

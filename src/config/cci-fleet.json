@@ -4,18 +4,22 @@
     {
       "id": "city-idf",
       "onlyRegions": [
-        "ILE-DE-FRANCE"
+        "OCCITANIE"
       ],
       "cityShard": {
         "of": 2,
-        "index": 0
+        "index": 1
       }
     },
     {
       "id": "city-occ",
       "onlyRegions": [
         "OCCITANIE"
-      ]
+      ],
+      "cityShard": {
+        "of": 2,
+        "index": 0
+      }
     },
     {
       "id": "s1",

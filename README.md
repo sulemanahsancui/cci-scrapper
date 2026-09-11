@@ -105,21 +105,21 @@ Configured in [`src/config/cci-fleet.json`](src/config/cci-fleet.json):
 
 | Instance | Mode | Regions |
 |---|---|---|
-| **city-idf** | city URL search | ILE-DE-FRANCE **shard 1/2** (first ~631 communes) |
+| **city-occ** | city URL search | OCCITANIE **shard 1/2** (first ~2120 communes) |
+| **city-idf** | city URL search | OCCITANIE **shard 2/2** (second ~2121 communes) |
 | **s2** | city URL search | ILE-DE-FRANCE **shard 2/2** (second ~631 communes) |
-| **city-occ** | city URL search | OCCITANIE (all communes, one by one) |
 | **s1** | region dropdown | AUVERGNE-RHONE-ALPES, COLLECTIVITES D'OUTRE-MER |
 | **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE, PAYS DE LA LOIRE |
 | **s4** | region dropdown | GRAND EST, NORMANDIE |
 | **s5** | region dropdown | NOUVELLE-AQUITAINE, PROVENCE-ALPES-COTE D'AZUR |
 
-*(Rebalanced: finished s2 now shares IDF city search with `city-idf` via `cityShard`.)*
+*(Rebalanced: free `city-idf` now shares Occitanie with `city-occ`. IDF shard 1/2 already done; `s2` keeps IDF shard 2/2.)*
 
 RAM tip: 7 Chromium windows need about **16–32 GB**.
 
 ### City search (ILE-DE-FRANCE + OCCITANIE)
 
-Dedicated instances `city-idf` / `city-occ` use:
+Dedicated instances use `?city=` search. Occitanie is split: `city-occ` = shard 1/2, `city-idf` = shard 2/2.
 
 `https://www.cci.fr/agent-immobilier?city=montpellier`
 

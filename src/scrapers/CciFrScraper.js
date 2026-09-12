@@ -10,6 +10,8 @@
 
 import path from 'path';
 import fs   from 'fs/promises';
+import { createReadStream } from 'fs';
+import readline from 'readline';
 import { stringify } from 'csv-stringify/sync';
 import { BaseScraper }       from './base/BaseScraper.js';
 import BrowserManager        from '../core/browser/BrowserManager.js';
@@ -92,6 +94,10 @@ export class CciFrScraper extends BaseScraper {
 
     this._outputCsv    = path.resolve(options.outputCsv    ?? DEFAULT_OUTPUT_CSV);
     this._progressFile = path.resolve(options.progressFile ?? DEFAULT_PROGRESS_FILE);
+    // Append-only URL list (keeps progress JSON small — avoids heap OOM)
+    this._urlsFile     = path.resolve(
+      options.urlsFile ?? this._progressFile.replace(/\.json$/i, '-urls.txt'),
+    );
     // If set, only process regions whose label matches one of these strings (case-insensitive partial match)
     this._onlyRegions  = options.onlyRegions ?? null;
     this._cityShard    = options.cityShard ?? null;
@@ -114,6 +120,7 @@ export class CciFrScraper extends BaseScraper {
     this._currentCity      = null;
     // Proof of completion per region — used to auto-heal false "done" flags
     this._regionStats      = {};
+    this._metaDirty        = false;
   }
 
   // ── Browser init ─────────────────────────────────────────────────────────────
@@ -1055,11 +1062,12 @@ export class CciFrScraper extends BaseScraper {
     this._pageCheckpoints  = {};
     this._count            = 0;
 
-    // 1) Load this instance's progress (resume position + own URL set)
+    // 1) Load this instance's progress metadata (no giant urls[] in JSON anymore)
+    let legacyUrls = [];
     try {
       const raw      = await fs.readFile(this._progressFile, 'utf8');
       const progress = JSON.parse(raw);
-      this._scrapedUrls      = new Set(progress.urls ?? (Array.isArray(progress) ? progress : []));
+      legacyUrls = Array.isArray(progress.urls) ? progress.urls : (Array.isArray(progress) ? progress : []);
       this._completedRegions = new Set(progress.completedRegions ?? []);
       this._completedCities  = progress.completedCities ?? {};
       this._regionStats      = progress.regionStats ?? {};
@@ -1068,23 +1076,24 @@ export class CciFrScraper extends BaseScraper {
       this._currentPage      = progress.currentPage     ?? 1;
       this._currentPageUrl   = progress.currentPageUrl  ?? null;
       this._pageCheckpoints  = progress.pageCheckpoints ?? {};
-      for (const u of this._scrapedUrls) this._knownUrls.add(u);
       this._pruneProgressToAssignedRegions();
       this._healFalseCompletes();
-      logger.info(`Resuming — ${this._scrapedUrls.size} URLs in progress file`, {
+      logger.info('Resuming progress metadata', {
         currentRegion:    this._currentRegion,
         currentCity:      this._currentCity,
         currentPage:      this._currentPage,
         completedRegions: [...this._completedRegions],
-        regionStats:      this._regionStats,
+        legacyUrlsInJson: legacyUrls.length,
       });
     } catch {
       logger.info('No progress file yet — starting fresh progress tracker');
     }
 
+    // 1b) Instance URL list (append-only text file) + one-time migrate from legacy JSON
+    await this._loadInstanceUrls(legacyUrls);
+
     // 2) Shared CSV is append-only. Create header only if missing.
-    //    Scan existing URLs so other instances' rows are not re-inserted.
-    //    Crash/resume never truncates this file — only appendFile is used.
+    //    Stream-scan URLs so other instances' rows are not re-inserted.
     const csvExists = await fs.access(this._outputCsv).then(() => true).catch(() => false);
     if (!csvExists) {
       await fs.writeFile(this._outputCsv, CSV_COLUMNS.join(',') + '\n', { flag: 'wx' }).catch(async (err) => {
@@ -1094,11 +1103,11 @@ export class CciFrScraper extends BaseScraper {
       logger.info('Created shared CSV with header (append-only)', { file: this._outputCsv });
     } else {
       const fromCsv = await this._urlsFromExistingCsv();
-      for (const u of fromCsv) this._knownUrls.add(u);
       logger.info('Shared CSV exists — append only, resume will skip known URLs', {
         file: this._outputCsv,
-        urlsInCsv: fromCsv.size,
+        urlsInCsv: fromCsv,
         knownUrls: this._knownUrls.size,
+        instanceUrls: this._scrapedUrls.size,
         completedCities: Object.fromEntries(
           Object.entries(this._completedCities).map(([k, v]) => [k, v.length]),
         ),
@@ -1109,6 +1118,60 @@ export class CciFrScraper extends BaseScraper {
     }
 
     this._count = this._scrapedUrls.size;
+    // Rewrite progress JSON without embedded urls[] (frees heap / disk thrash)
+    await this._flushProgress();
+  }
+
+  /** Load instance URLs from sidecar file; migrate legacy progress.urls once. */
+  async _loadInstanceUrls(legacyUrls = []) {
+    const fromFile = await this._readUrlLines(this._urlsFile);
+    for (const u of fromFile) {
+      this._scrapedUrls.add(u);
+      this._knownUrls.add(u);
+    }
+
+    if (legacyUrls.length) {
+      let migrated = 0;
+      const lines = [];
+      for (const u of legacyUrls) {
+        if (!u || this._scrapedUrls.has(u)) continue;
+        this._scrapedUrls.add(u);
+        this._knownUrls.add(u);
+        lines.push(u);
+        migrated++;
+      }
+      if (lines.length) {
+        await fs.appendFile(this._urlsFile, `${lines.join('\n')}\n`, 'utf8');
+      }
+      logger.info('Migrated legacy progress.urls into sidecar urls file', {
+        file: this._urlsFile,
+        migrated,
+        total: this._scrapedUrls.size,
+      });
+    } else {
+      logger.info('Loaded instance URL sidecar', {
+        file: this._urlsFile,
+        urls: this._scrapedUrls.size,
+      });
+    }
+  }
+
+  async _readUrlLines(filePath) {
+    const urls = [];
+    try {
+      await fs.access(filePath);
+    } catch {
+      return urls;
+    }
+    const rl = readline.createInterface({
+      input: createReadStream(filePath, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      const u = line.trim();
+      if (u) urls.push(u);
+    }
+    return urls;
   }
 
   /**
@@ -1279,28 +1342,43 @@ export class CciFrScraper extends BaseScraper {
     return this._onlyRegions.filter((wanted) => !this._isRegionMarkedComplete(wanted));
   }
 
-  /** Read url column from existing CSV so restarts never re-insert known rows. */
+  /** Stream-read url column from existing CSV (avoids loading entire file into RAM). */
   async _urlsFromExistingCsv() {
-    const urls = new Set();
+    let count = 0;
     try {
-      const text = await fs.readFile(this._outputCsv, 'utf8');
-      const lines = text.split(/\r?\n/).filter((l) => l.trim());
-      if (lines.length < 2) return urls;
+      await fs.access(this._outputCsv);
+    } catch {
+      return 0;
+    }
 
-      const header = lines[0].split(',');
-      const urlIdx = header.indexOf('url');
-      if (urlIdx < 0) return urls;
+    try {
+      const rl = readline.createInterface({
+        input: createReadStream(this._outputCsv, { encoding: 'utf8' }),
+        crlfDelay: Infinity,
+      });
 
-      // Lightweight parse: handle quoted fields for the url column
-      for (let i = 1; i < lines.length; i++) {
-        const cols = this._parseCsvLine(lines[i]);
+      let urlIdx = -1;
+      let isHeader = true;
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        if (isHeader) {
+          const header = line.split(',');
+          urlIdx = header.indexOf('url');
+          isHeader = false;
+          if (urlIdx < 0) return 0;
+          continue;
+        }
+        const cols = this._parseCsvLine(line);
         const u = cols[urlIdx];
-        if (u) urls.add(u);
+        if (u) {
+          this._knownUrls.add(u);
+          count++;
+        }
       }
     } catch (err) {
       logger.warn('Could not scan existing CSV for URLs', { error: err.message });
     }
-    return urls;
+    return count;
   }
 
   _parseCsvLine(line) {
@@ -1337,10 +1415,17 @@ export class CciFrScraper extends BaseScraper {
   }
 
   async _saveProgress(href) {
+    if (this._scrapedUrls.has(href)) {
+      this._knownUrls.add(href);
+      this._count = this._scrapedUrls.size;
+      return;
+    }
     this._scrapedUrls.add(href);
     this._knownUrls.add(href);
-    await this._flushProgress();
+    // Append-only sidecar — crash-safe without rewriting tens of thousands of URLs as JSON
+    await fs.appendFile(this._urlsFile, `${href}\n`, 'utf8');
     this._count = this._scrapedUrls.size;
+    // Metadata (page/region) is flushed by the pagination loop; keep JSON lean
   }
 
   async _saveRegionComplete(regionLabel, stats = {}) {
@@ -1360,10 +1445,10 @@ export class CciFrScraper extends BaseScraper {
   }
 
   async _flushProgress() {
-    // Atomic-ish replace: write temp then rename (Windows: copy+unlink if rename fails)
+    // Metadata only — URLs live in the sidecar file (prevents heap OOM)
     const payload = JSON.stringify({
       instanceId:       this._instanceId,
-      urls:             [...this._scrapedUrls],
+      urlsFile:         path.basename(this._urlsFile),
       completedRegions: [...this._completedRegions],
       completedCities:  this._completedCities,
       regionStats:      this._regionStats,

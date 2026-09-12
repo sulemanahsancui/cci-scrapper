@@ -155,7 +155,12 @@ function spawnInstance(id, { manualResume = false } = {}) {
   const prev = children.get(id) || { restarts: 0 };
   const proc = spawn(process.execPath, [path.join(__dirname, 'run-cci-instance.js'), '--id', id], {
     cwd: __dirname,
-    env: { ...process.env, CCI_INSTANCE: id },
+    env: {
+      ...process.env,
+      CCI_INSTANCE: id,
+      // Large shared CSV + URL sets need headroom (default ~2GB OOMs on Contabo)
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=8192'].filter(Boolean).join(' '),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });

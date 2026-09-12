@@ -249,7 +249,14 @@
               ${inst.currentCity ? `city <strong>${inst.currentCity}</strong>` : ''}
               ${inst.currentRegion ? `page <strong>${inst.currentPage ?? '—'}</strong>` : ''}
             </div>
-            <div class="regions">Assigned: ${(inst.regions || []).join(', ') || '—'}${inst.cityShard ? ` · city shard ${inst.cityShard.index + 1}/${inst.cityShard.of}` : ''}</div>
+            <div class="regions">Assigned: ${(inst.regions || []).join(', ') || '—'}${inst.cityShard ? ` · city shard ${Number(inst.cityShard.index) + 1}/${inst.cityShard.of}${inst.cityShard.untilCity ? ` until ${inst.cityShard.untilCity}` : ''}${inst.cityShard.afterCity ? ` after ${inst.cityShard.afterCity}` : ''}` : ''}${(() => {
+              const pr = inst.pageRange;
+              if (!pr) return '';
+              if (pr.start != null || pr.end != null) return ` · pages ${pr.start ?? '?'}-${pr.end ?? '?'}`;
+              const first = Object.values(pr)[0];
+              if (first && typeof first === 'object') return ` · pages ${first.start ?? '?'}-${first.end ?? '?'}`;
+              return '';
+            })()}</div>
             <div class="regions">Completed: ${(inst.completedRegions || []).join(', ') || '—'}</div>
             ${inst.lastError ? `<div class="error-line">${inst.lastError}</div>` : ''}
             <div class="card-actions">

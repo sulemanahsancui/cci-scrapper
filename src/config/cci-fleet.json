@@ -2,62 +2,25 @@
   "statusPort": 8787,
   "instances": [
     {
-      "id": "city-idf",
-      "onlyRegions": [
-        "OCCITANIE"
-      ],
-      "cityShard": {
-        "of": 12,
-        "index": 8
-      }
-    },
-    {
-      "id": "city-occ",
-      "onlyRegions": [
-        "OCCITANIE"
-      ],
-      "cityShard": {
-        "of": 12,
-        "index": 9
-      }
-    },
-    {
-      "id": "s1",
-      "onlyRegions": [
-        "OCCITANIE"
-      ],
-      "cityShard": {
-        "of": 12,
-        "index": 10
-      }
-    },
-    {
       "id": "s2",
       "onlyRegions": [
         "ILE-DE-FRANCE"
       ],
       "cityShard": {
         "of": 8,
-        "index": 7
+        "index": 7,
+        "untilCity": "Us"
       }
     },
     {
-      "id": "s3",
+      "id": "city-idf",
       "onlyRegions": [
-        "BRETAGNE",
-        "CENTRE-VAL DE LOIRE",
-        "HAUTS-DE-FRANCE",
-        "PAYS DE LA LOIRE"
-      ]
-    },
-    {
-      "id": "s4",
-      "onlyRegions": [
-        "OCCITANIE"
+        "ILE-DE-FRANCE"
       ],
       "cityShard": {
-        "of": 12,
-        "index": 11
+        "of": 8,
+        "index": 7,
+        "afterCity": "Us"
       }
     },
     {
@@ -65,7 +28,53 @@
       "onlyRegions": [
         "NOUVELLE-AQUITAINE",
         "PROVENCE-ALPES-COTE D'AZUR"
-      ]
+      ],
+      "pageRange": {
+        "PROVENCE-ALPES-COTE D'AZUR": {
+          "start": 537,
+          "end": 568
+        }
+      }
+    },
+    {
+      "id": "city-occ",
+      "onlyRegions": [
+        "PROVENCE-ALPES-COTE D'AZUR"
+      ],
+      "pageRange": {
+        "start": 569,
+        "end": 600
+      }
+    },
+    {
+      "id": "s1",
+      "onlyRegions": [
+        "PROVENCE-ALPES-COTE D'AZUR"
+      ],
+      "pageRange": {
+        "start": 601,
+        "end": 632
+      }
+    },
+    {
+      "id": "s3",
+      "onlyRegions": [
+        "PROVENCE-ALPES-COTE D'AZUR"
+      ],
+      "pageRange": {
+        "start": 633,
+        "end": 664
+      }
+    },
+    {
+      "id": "s4",
+      "onlyRegions": [
+        "PROVENCE-ALPES-COTE D'AZUR"
+      ],
+      "pageRange": {
+        "start": 665,
+        "end": 694
+      }
     }
   ]
 }

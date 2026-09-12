@@ -95,6 +95,9 @@ export class CciFrScraper extends BaseScraper {
     // If set, only process regions whose label matches one of these strings (case-insensitive partial match)
     this._onlyRegions  = options.onlyRegions ?? null;
     this._cityShard    = options.cityShard ?? null;
+    // Optional page window for region-dropdown splits: { start, end } or
+    // { "PROVENCE-ALPES-COTE D'AZUR": { start, end } }
+    this._pageRange    = options.pageRange ?? null;
     this._instanceId   = options.instanceId ?? null;
 
     this._scrapedUrls      = new Set();
@@ -191,15 +194,33 @@ export class CciFrScraper extends BaseScraper {
         continue;
       }
 
+      const pageRange = this._resolvePageRange(region.label);
+
       // Resume from the exact page: currentRegion has priority (live checkpoint),
-      // then pageCheckpoints (manually pre-set), then default to page 1.
+      // then pageRange.start / pageCheckpoints, then default to page 1.
       const sameRegion =
         normalizeRegionKey(this._currentRegion) === normalizeRegionKey(region.label);
       const isResumingRegion = sameRegion && this._currentPage > 1 && this._currentPageUrl;
-      const startPage = isResumingRegion
+
+      let startPage = isResumingRegion
         ? this._currentPage
-        : (this._pageCheckpoints[region.label] ?? 1);
+        : (pageRange?.start ?? this._pageCheckpoints[region.label] ?? 1);
       const startPageUrl = isResumingRegion ? this._currentPageUrl : null;
+
+      if (pageRange?.end != null && Number.isFinite(pageRange.end) && startPage > pageRange.end) {
+        logger.info('Already past pageRange end — marking region range complete', {
+          label: region.label,
+          startPage,
+          pageRange,
+        });
+        await this._saveRegionComplete(region.label, {
+          exhausted: true,
+          listingsSeen: 0,
+          expectedTotal: null,
+          pageRange,
+        });
+        continue;
+      }
 
       // Once we consume a pre-set checkpoint, remove it so it doesn't re-apply on the next run
       if (this._pageCheckpoints[region.label]) {
@@ -207,7 +228,12 @@ export class CciFrScraper extends BaseScraper {
         await this._flushProgress();
       }
 
-      logger.info('Processing region', { value: region.value, label: region.label, startPage });
+      logger.info('Processing region', {
+        value: region.value,
+        label: region.label,
+        startPage,
+        pageRange,
+      });
 
       if (startPageUrl) {
         // Jump directly to the saved results page — avoids re-navigating from page 1
@@ -227,18 +253,17 @@ export class CciFrScraper extends BaseScraper {
         await this.page.click('#edit-submit');
         await this._waitForPage();
 
-        // If we need to skip ahead (startPageUrl was not saved), click through pages
-        for (let p = 1; p < startPage; p++) {
-          const advanced = await this._goToNextPage();
-          if (!advanced) {
-            logger.warn(`Could not reach page ${startPage} — starting from page ${p + 1}`, { region: region.label });
-            break;
-          }
+        // Jump via ?page= (Drupal 0-based) — never click 500+ times
+        if (startPage > 1) {
+          await this._gotoResultsPageNumber(startPage);
           await this._waitForPage();
         }
       }
 
-      const { listingsSeen, exhausted, expectedTotal } = await this._scrapeAllPages(region.label, startPage);
+      const { listingsSeen, exhausted, expectedTotal, rangeComplete } = await this._scrapeAllPages(
+        region.label,
+        startPage,
+      );
 
       // Never mark complete when this pass saw zero listing links (avoids false-complete)
       if (listingsSeen === 0) {
@@ -265,8 +290,9 @@ export class CciFrScraper extends BaseScraper {
         return;
       }
 
-      // Only compare to site total on a fresh pass from page 1 (resume passes see a partial count)
-      if (startPage <= 1 && !this._countsLookComplete(listingsSeen, expectedTotal)) {
+      // Partial page ranges must not be judged against the full-region site total
+      const ranged = Boolean(pageRange?.end && Number.isFinite(pageRange.end));
+      if (!ranged && !rangeComplete && startPage <= 1 && !this._countsLookComplete(listingsSeen, expectedTotal)) {
         this._rememberRegionStats(region.label, { exhausted: false, listingsSeen, expectedTotal });
         await this._flushProgress();
         logger.warn('Region NOT marked complete — listings far below site total', {
@@ -278,19 +304,21 @@ export class CciFrScraper extends BaseScraper {
       }
 
       const provenSeen =
-        startPage > 1 && expectedTotal != null
+        startPage > 1 && expectedTotal != null && !ranged
           ? expectedTotal
           : listingsSeen;
 
       await this._saveRegionComplete(region.label, {
         exhausted: true,
         listingsSeen: provenSeen,
-        expectedTotal,
+        expectedTotal: ranged ? null : expectedTotal,
+        pageRange,
       });
-      logger.info('Region complete', {
+      logger.info(ranged || rangeComplete ? 'Region page-range complete' : 'Region complete', {
         label: region.label,
         listingsSeen: provenSeen,
         expectedTotal,
+        pageRange,
         totalSaved: this._count,
       });
     }
@@ -598,7 +626,19 @@ export class CciFrScraper extends BaseScraper {
           pages: pageNum,
           expectedTotal,
         });
-        return { listingsSeen, exhausted: true, expectedTotal };
+        return { listingsSeen, exhausted: true, expectedTotal, rangeComplete: false };
+      }
+
+      // Stop at assigned pageRange.end (multi-instance page splits)
+      const pageRange = this._resolvePageRange(regionLabel);
+      if (pageRange?.end != null && Number.isFinite(pageRange.end) && pageNum >= pageRange.end) {
+        logger.info('Reached pageRange end — stopping this instance range', {
+          region: regionLabel,
+          page: pageNum,
+          end: pageRange.end,
+          listingsSeen,
+        });
+        return { listingsSeen, exhausted: true, expectedTotal, rangeComplete: true };
       }
 
       // Prefer URL ?page= N+1 (reliable). Fall back to clicking "next".
@@ -770,6 +810,46 @@ export class CciFrScraper extends BaseScraper {
     const estimated =
       startPage > 1 ? (startPage - 1) * 32 + listingsSeen : listingsSeen;
     return estimated >= expectedTotal * 0.9;
+  }
+
+  /**
+   * Fleet page window for one region. Accepts:
+   *   { start, end }
+   *   { "PROVENCE-ALPES-COTE D'AZUR": { start, end } }
+   */
+  _resolvePageRange(regionLabel) {
+    const pr = this._pageRange;
+    if (!pr || typeof pr !== 'object') return null;
+
+    if (pr.start != null || pr.end != null) {
+      return {
+        start: pr.start != null ? Number(pr.start) : 1,
+        end: pr.end != null ? Number(pr.end) : Infinity,
+      };
+    }
+
+    const want = normalizeRegionKey(regionLabel);
+    for (const [key, val] of Object.entries(pr)) {
+      if (!val || typeof val !== 'object') continue;
+      const k = normalizeRegionKey(key);
+      if (k === want || k.includes(want) || want.includes(k)) {
+        return {
+          start: val.start != null ? Number(val.start) : 1,
+          end: val.end != null ? Number(val.end) : Infinity,
+        };
+      }
+    }
+    return null;
+  }
+
+  /** Jump results list to 1-based page via Drupal ?page= (0-based). */
+  async _gotoResultsPageNumber(page1Based) {
+    const target = Math.max(1, Number(page1Based) || 1);
+    const url = new URL(this.page.url());
+    url.searchParams.set('page', String(target - 1));
+    logger.info('Jumping to results page', { page: target, url: url.toString() });
+    await this.page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await this.cloudflareHandler.bypass(this.page);
   }
 
   /** Parse "20 946 résultats" (or similar) from the results page. */
@@ -1168,6 +1248,11 @@ export class CciFrScraper extends BaseScraper {
 
     // Region dropdown: must have explicit exhausted=true proof
     if (!stats?.exhausted) return false;
+
+    // Page-range workers only own a slice — don't require full-region totals
+    if (this._resolvePageRange(label) || stats.pageRange) {
+      return true;
+    }
 
     if (stats.expectedTotal != null && stats.expectedTotal > 0) {
       if ((stats.listingsSeen || 0) < stats.expectedTotal * 0.85) return false;

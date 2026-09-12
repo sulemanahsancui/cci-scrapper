@@ -103,23 +103,23 @@ CCI_HEADLESS=false
 
 Configured in [`src/config/cci-fleet.json`](src/config/cci-fleet.json):
 
-| Instance | Mode | Regions |
+| Instance | Mode | Assignment |
 |---|---|---|
-| **city-idf** | city URL search | OCCITANIE **shard 9/12** (finish current slice ≈ Ade → Asté, ~36 left) |
-| **city-occ** | city URL search | OCCITANIE **shard 10/12** (~354 communes, fresh) |
-| **s1** | city URL search | OCCITANIE **shard 11/12** (~353 communes, fresh) |
-| **s4** | city URL search | OCCITANIE **shard 12/12** (~354 communes, fresh) |
-| **s2** | city URL search | ILE-DE-FRANCE **shard 8/8** (continue Ermont → end) |
-| **s3** | region dropdown | BRETAGNE, CENTRE-VAL DE LOIRE, HAUTS-DE-FRANCE, PAYS DE LA LOIRE |
-| **s5** | region dropdown | NOUVELLE-AQUITAINE, PROVENCE-ALPES-COTE D'AZUR |
+| **s2** | city URL | IDF shard 8/8 **until Us** (finish current city) |
+| **city-idf** | city URL | IDF shard 8/8 **after Us** (~16 remaining communes) |
+| **s5** | region pages | PACA **pages 537–568** (continue from page 537) |
+| **city-occ** | region pages | PACA **pages 569–600** |
+| **s1** | region pages | PACA **pages 601–632** |
+| **s3** | region pages | PACA **pages 633–664** |
+| **s4** | region pages | PACA **pages 665–694** |
 
-*(Rebalanced: free city-occ / s1 / s4 take remaining Occitanie tail. s3 keeps Pays de la Loire; s5 keeps PACA.)*
+*(Final push: Us stays on s2; remaining IDF cities + PACA page tail split across free instances.)*
 
 RAM tip: 7 Chromium windows need about **16–32 GB**.
 
 ### City search (ILE-DE-FRANCE + OCCITANIE)
 
-Dedicated instances use `?city=` search. Occitanie remaining work is split across **city-idf / city-occ / s1 / s4** (shards 9–12 of 12). IDF tail stays on **s2** (shard 8/8).
+Dedicated instances use `?city=` search where needed. Remaining **PACA** work is split by **pageRange** across s5 / city-occ / s1 / s3 / s4. IDF: **s2** finishes Us; **city-idf** takes communes after Us.
 
 `https://www.cci.fr/agent-immobilier?city=montpellier`
 

@@ -100,22 +100,39 @@ export async function citiesForRegion(regionLabel, csvPath = DEFAULT_CSV) {
 /**
  * Split a city list across fleet instances.
  * Contiguous shards: { of: 2, index: 0 } → first half, { of: 2, index: 1 } → second half.
+ * Optional untilCity (inclusive) / afterCity (exclusive) trim the shard further.
  */
 export function applyCityShard(cities, shard) {
   if (!shard || cities == null) return cities || [];
-  const of = Number(shard.of);
-  const index = Number(shard.index);
+  let list = [...cities];
+
+  const of = Number(shard.of ?? 1);
+  const index = Number(shard.index ?? 0);
   if (!Number.isFinite(of) || of < 1) {
     throw new Error(`Invalid cityShard.of: ${JSON.stringify(shard)}`);
   }
   if (!Number.isFinite(index) || index < 0 || index >= of) {
     throw new Error(`Invalid cityShard.index: ${JSON.stringify(shard)}`);
   }
-  if (of === 1) return [...cities];
-  const n = cities.length;
-  const start = Math.floor((n * index) / of);
-  const end = Math.floor((n * (index + 1)) / of);
-  return cities.slice(start, end);
+  if (of > 1) {
+    const n = list.length;
+    const start = Math.floor((n * index) / of);
+    const end = Math.floor((n * (index + 1)) / of);
+    list = list.slice(start, end);
+  }
+
+  if (shard.untilCity) {
+    const needle = cityToQuery(shard.untilCity);
+    const idx = list.findIndex((c) => cityToQuery(c) === needle);
+    if (idx >= 0) list = list.slice(0, idx + 1);
+  }
+  if (shard.afterCity) {
+    const needle = cityToQuery(shard.afterCity);
+    const idx = list.findIndex((c) => cityToQuery(c) === needle);
+    list = idx >= 0 ? list.slice(idx + 1) : [];
+  }
+
+  return list;
 }
 
 function splitCsvLine(line) {

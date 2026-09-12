@@ -47,6 +47,7 @@ async function main() {
     instanceId:   id,
     onlyRegions:  instance.onlyRegions,
     cityShard:    instance.cityShard ?? null,
+    pageRange:    instance.pageRange ?? null,
     progressFile: path.join(outputDir, 'cci-progress.json'),
     // One shared CSV for all instances (same as before)
     outputCsv:    path.resolve(__dirname, 'output', 'cci-agents.csv'),
@@ -55,9 +56,22 @@ async function main() {
   });
 
   const shardInfo = instance.cityShard
-    ? ` cityShard ${instance.cityShard.index + 1}/${instance.cityShard.of}`
+    ? ` cityShard ${Number(instance.cityShard.index) + 1}/${instance.cityShard.of}`
     : '';
-  console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}${shardInfo}`);
+  const until = instance.cityShard?.untilCity ? ` until=${instance.cityShard.untilCity}` : '';
+  const after = instance.cityShard?.afterCity ? ` after=${instance.cityShard.afterCity}` : '';
+  const pages = (() => {
+    if (!instance.pageRange) return '';
+    if (instance.pageRange.start != null || instance.pageRange.end != null) {
+      return ` pages ${instance.pageRange.start ?? '?'}-${instance.pageRange.end ?? '?'}`;
+    }
+    const first = Object.values(instance.pageRange)[0];
+    if (first && typeof first === 'object') {
+      return ` pages ${first.start ?? '?'}-${first.end ?? '?'}`;
+    }
+    return '';
+  })();
+  console.log(`[${id}] starting — regions: ${instance.onlyRegions.join(', ')}${shardInfo}${until}${after}${pages}`);
   try {
     await scraper.run();
     console.log(`[${id}] finished`);
